@@ -20,7 +20,7 @@ from .store import Store
 from .weather import OpenMeteo, WeatherSeries
 
 log = logging.getLogger(__name__)
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 CALIBRATED_FIELDS = ("q_base_kw", "q_slope_kw_per_k", "knee_slope_kw_per_k",
                      "solar_gain_kw_per_wm2", "uncertainty", "flow_offset_hp")
 BIAS_DECAY_H = 6.0
