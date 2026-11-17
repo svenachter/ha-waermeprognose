@@ -1,9 +1,9 @@
 name: Wärmeprognose
-version: "0.1.2"
+version: "0.2.0"
 slug: waermeprognose
 description: >-
-  Wärme- und Strombedarfsprognose für die Wärmepumpe (15-min-Raster, 48–72 h)
-  aus open-meteo, Heizkurve und Warmwasser-Historie – abrufbar per REST-API.
+  Wärme- und Strombedarfsprognose für die Wärmepumpe plus PV (Helios) und
+  Haushaltslast im 15-min-Raster (48–72 h) – abrufbar per REST-API.
 url: https://github.com/svenachter/ha-waermeprognose
 arch:
   - amd64
@@ -34,17 +34,41 @@ options:
     dhw_thermal: sensor.eu20l_hp1_hot_water_thermal_energy_total
     dhw_electric: sensor.eu20l_hp1_hot_water_energy_total
     hp_flow: sensor.eu20l_hp1_flow_line_temperature
+    household_power: sensor.hausverbrauch_ohne_warmepumpe
+    hp_power: sensor.warmepumpe_leistung
   circuits:
     - name: HC1
+      mode: curve
       curve_cold: number.eu20l_hc1_heating_curve_cold_outside_temp_number
       curve_mid: number.eu20l_hc1_heating_curve_mid_outside_temp_number
       curve_warm: number.eu20l_hc1_heating_curve_warm_outside_temp_number
       offset: number.eu20l_hc1_flow_line_offset_temperature_number
+      target_flow: sensor.eu20l_hc1_target_temp_flow_line
+      state: sensor.eu20l_hc1_operating_state
     - name: HC2
+      mode: curve
       curve_cold: number.eu20l_hc2_heating_curve_cold_outside_temp_number
       curve_mid: number.eu20l_hc2_heating_curve_mid_outside_temp_number
       curve_warm: number.eu20l_hc2_heating_curve_warm_outside_temp_number
       offset: number.eu20l_hc2_flow_line_offset_temperature_number
+      target_flow: sensor.eu20l_hc2_target_temp_flow_line
+      state: sensor.eu20l_hc2_operating_state
+    - name: HC3
+      mode: target
+      curve_cold: number.eu20l_hc3_heating_curve_cold_outside_temp_number
+      curve_mid: number.eu20l_hc3_heating_curve_mid_outside_temp_number
+      curve_warm: number.eu20l_hc3_heating_curve_warm_outside_temp_number
+      offset: number.eu20l_hc3_flow_line_offset_temperature_number
+      target_flow: sensor.eu20l_hc3_target_temp_flow_line
+      state: sensor.eu20l_hc3_operating_state
+    - name: HC4
+      mode: curve
+      curve_cold: number.eu20l_hc4_heating_curve_cold_outside_temp_number
+      curve_mid: number.eu20l_hc4_heating_curve_mid_outside_temp_number
+      curve_warm: number.eu20l_hc4_heating_curve_warm_outside_temp_number
+      offset: number.eu20l_hc4_flow_line_offset_temperature_number
+      target_flow: sensor.eu20l_hc4_target_temp_flow_line
+      state: sensor.eu20l_hc4_operating_state
   model:
     eta: 0.56
     eta_frost: 0.51
@@ -69,6 +93,24 @@ options:
     enabled: true
     hour: 3
     prior_hours: 72
+  pv:
+    enabled: true
+    service: helios_forecast.get_forecast
+  household:
+    enabled: true
+    days: 3
+    aggregate: mean
+    split_weekend: true
+    correct_hp_share: true
+  inactive_states:
+    - "OFF"
+    - RELEASE-OFF
+    - TIME-OFF
+    - CH-SUMMER
+    - COOLING
+    - CC-WINTER
+    - STBY-COOLING
+    - ERROR
   publish_sensors: true
   log_level: info
 schema:
@@ -88,12 +130,17 @@ schema:
     dhw_thermal: str
     dhw_electric: str
     hp_flow: str
+    household_power: str?
+    hp_power: str?
   circuits:
     - name: str
-      curve_cold: str
-      curve_mid: str
-      curve_warm: str
+      mode: list(curve|target)?
+      curve_cold: str?
+      curve_mid: str?
+      curve_warm: str?
       offset: str?
+      target_flow: str?
+      state: str?
   model:
     eta: float(0.3,0.75)
     eta_frost: float(0.3,0.75)
@@ -118,5 +165,17 @@ schema:
     enabled: bool
     hour: int(0,23)
     prior_hours: int(0,2000)
+  pv:
+    enabled: bool?
+    service: str?
+    config_entry_id: str?
+  household:
+    enabled: bool?
+    days: int(1,7)?
+    aggregate: list(mean|median)?
+    split_weekend: bool?
+    correct_hp_share: bool?
+  inactive_states:
+    - str
   publish_sensors: bool
   log_level: list(debug|info|warning|error)

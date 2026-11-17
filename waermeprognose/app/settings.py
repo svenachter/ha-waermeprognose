@@ -23,15 +23,26 @@ class Entities:
     dhw_thermal: str = "sensor.eu20l_hp1_hot_water_thermal_energy_total"
     dhw_electric: str = "sensor.eu20l_hp1_hot_water_energy_total"
     hp_flow: str = "sensor.eu20l_hp1_flow_line_temperature"
+    household_power: str = "sensor.hausverbrauch_ohne_warmepumpe"   # W, house without HP
+    hp_power: str = "sensor.warmepumpe_leistung"                    # W, controller value
 
 
 @dataclass
 class Circuit:
+    """Heating circuit. mode "curve": set point from heating curve vs. forecast temperature;
+    mode "target": the current set point (e.g. pool, fixed flow) is held over the horizon."""
     name: str
-    curve_cold: str
-    curve_mid: str
-    curve_warm: str
+    mode: str = "curve"
+    curve_cold: str | None = None
+    curve_mid: str | None = None
+    curve_warm: str | None = None
     offset: str | None = None
+    target_flow: str | None = None
+    state: str | None = None
+
+
+INACTIVE_STATES_DEFAULT = ["OFF", "RELEASE-OFF", "TIME-OFF", "CH-SUMMER", "COOLING",
+                           "CC-WINTER", "STBY-COOLING", "ERROR"]
 
 
 @dataclass
@@ -65,6 +76,22 @@ class DhwSettings:
 
 
 @dataclass
+class PvSettings:
+    enabled: bool = True
+    service: str = "helios_forecast.get_forecast"
+    config_entry_id: str = ""
+
+
+@dataclass
+class HouseholdSettings:
+    enabled: bool = True
+    days: int = 3                 # last N complete days of the same day type
+    aggregate: str = "mean"       # mean | median
+    split_weekend: bool = True
+    correct_hp_share: bool = True  # subtract (power_correction-1) x HP power
+
+
+@dataclass
 class CalibrationSettings:
     enabled: bool = True
     hour: int = 3
@@ -72,18 +99,19 @@ class CalibrationSettings:
 
 
 def _default_circuits() -> list[Circuit]:
-    out = []
-    for n, off in (("hc1", True), ("hc2", True)):
-        out.append(
-            Circuit(
-                name=n.upper(),
-                curve_cold=f"number.eu20l_{n}_heating_curve_cold_outside_temp_number",
-                curve_mid=f"number.eu20l_{n}_heating_curve_mid_outside_temp_number",
-                curve_warm=f"number.eu20l_{n}_heating_curve_warm_outside_temp_number",
-                offset=f"number.eu20l_{n}_flow_line_offset_temperature_number" if off else None,
-            )
+    def c(n: int, mode: str) -> Circuit:
+        p = f"eu20l_hc{n}"
+        return Circuit(
+            name=f"HC{n}", mode=mode,
+            curve_cold=f"number.{p}_heating_curve_cold_outside_temp_number",
+            curve_mid=f"number.{p}_heating_curve_mid_outside_temp_number",
+            curve_warm=f"number.{p}_heating_curve_warm_outside_temp_number",
+            offset=f"number.{p}_flow_line_offset_temperature_number",
+            target_flow=f"sensor.{p}_target_temp_flow_line",
+            state=f"sensor.{p}_operating_state",
         )
-    return out
+    # HC3 (pool) runs a fixed set point; the others follow the heating curve
+    return [c(1, "curve"), c(2, "curve"), c(3, "target"), c(4, "curve")]
 
 
 @dataclass
@@ -99,6 +127,9 @@ class Settings:
     model: ModelParams = field(default_factory=ModelParams)
     dhw: DhwSettings = field(default_factory=DhwSettings)
     calibration: CalibrationSettings = field(default_factory=CalibrationSettings)
+    pv: PvSettings = field(default_factory=PvSettings)
+    household: HouseholdSettings = field(default_factory=HouseholdSettings)
+    inactive_states: list[str] = field(default_factory=lambda: list(INACTIVE_STATES_DEFAULT))
     publish_sensors: bool = True
     log_level: str = "info"
     data_dir: str = "/data"
@@ -135,12 +166,17 @@ def load_settings(path: str | os.PathLike | None = None) -> Settings:
         s.facades = [_merge(Facade, f) for f in raw["facades"]]
     s.entities = _merge(Entities, raw.get("entities"))
     if raw.get("circuits"):
-        s.circuits = [Circuit(**{k: c.get(k) for k in
-                                 ("name", "curve_cold", "curve_mid", "curve_warm", "offset")})
+        keys = ("name", "mode", "curve_cold", "curve_mid", "curve_warm", "offset",
+                "target_flow", "state")
+        s.circuits = [Circuit(**{k: c[k] for k in keys if c.get(k) not in (None, "")})
                       for c in raw["circuits"]]
     s.model = _merge(ModelParams, raw.get("model"))
     s.dhw = _merge(DhwSettings, raw.get("dhw"))
     s.calibration = _merge(CalibrationSettings, raw.get("calibration"))
+    s.pv = _merge(PvSettings, raw.get("pv"))
+    s.household = _merge(HouseholdSettings, raw.get("household"))
+    if raw.get("inactive_states"):
+        s.inactive_states = [str(x).upper() for x in raw["inactive_states"]]
     s.data_dir = os.environ.get("DATA_DIR", str(path.parent))
     s.horizon_hours = int(max(12, min(72, s.horizon_hours)))
     return s

@@ -29,6 +29,15 @@ class CurvePoints:
         return np.interp(t, [-22.0, 0.0, 22.0], [self.cold, self.mid, self.warm]) + self.offset
 
 
+@dataclass
+class FixedFlow:
+    """Circuit with a fixed flow set point (e.g. pool), held over the horizon."""
+    value: float
+
+    def flow(self, t_out: np.ndarray) -> np.ndarray:
+        return np.full(np.shape(t_out), float(self.value))
+
+
 def ema(values: np.ndarray, dt_h: float, tau_h: float, init: float | None = None) -> np.ndarray:
     """Exponential smoothing (building/controller damping of outdoor temperature)."""
     v = np.asarray(values, dtype=float)
@@ -76,7 +85,7 @@ class ForecastInputs:
     rh: np.ndarray                 # relative humidity, %
     gti: np.ndarray                # summed GTI over facades, W/m²
     q_dhw: np.ndarray              # DHW heat, kW (slot mean)
-    curves: list[CurvePoints]
+    curves: list[CurvePoints | FixedFlow]
 
 
 def run(inputs: ForecastInputs, p: ModelParams) -> dict[str, np.ndarray]:

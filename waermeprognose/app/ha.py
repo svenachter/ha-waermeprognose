@@ -58,6 +58,15 @@ class HomeAssistant:
                                    timeout=15)
         r.raise_for_status()
 
+    async def call_service(self, service: str, data: dict | None = None) -> dict:
+        """Call ``domain.service`` and return its response data (``service_response``)."""
+        domain, name = service.split(".", 1)
+        r = await self.client.post(f"{self.base}/api/services/{domain}/{name}?return_response",
+                                   headers=self._headers, content=json.dumps(data or {}), timeout=30)
+        r.raise_for_status()
+        body = r.json()
+        return body.get("service_response", body) if isinstance(body, dict) else {}
+
     async def statistics(self, statistic_ids: list[str], start: datetime, end: datetime,
                          period: str = "hour", types: tuple[str, ...] = ("change", "mean")
                          ) -> dict[str, list[dict]]:

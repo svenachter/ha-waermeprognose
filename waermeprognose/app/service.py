@@ -12,15 +12,16 @@ import httpx
 import numpy as np
 
 from . import dhw as dhw_mod
+from . import extras
 from .calibration import fit_flow_offset, fit_heat_model
 from .ha import HomeAssistant
-from .model import CurvePoints, ForecastInputs, ema, run
+from .model import CurvePoints, FixedFlow, ForecastInputs, ema, run
 from .settings import ModelParams, Settings
 from .store import Store
 from .weather import OpenMeteo, WeatherSeries
 
 log = logging.getLogger(__name__)
-VERSION = "0.1.2"
+VERSION = "0.2.0"
 CALIBRATED_FIELDS = ("q_base_kw", "q_slope_kw_per_k", "knee_slope_kw_per_k",
                      "solar_gain_kw_per_wm2", "uncertainty", "flow_offset_hp")
 BIAS_DECAY_H = 6.0
@@ -46,6 +47,9 @@ class ForecastService:
         self.lat = settings.latitude
         self.lon = settings.longitude
         self.profile = dhw_mod.DhwProfile()
+        self.household = extras.HouseholdProfile()
+        self._household_date = None
+        self.pv_status: dict = {"enabled": settings.pv.enabled}
         self.result: dict | None = None
         self.last_run: datetime | None = None
         self.last_error: str | None = None
@@ -72,6 +76,7 @@ class ForecastService:
             self.calibration_info = {**info, "created": created.isoformat()}
             log.info("Kalibrierte Parameter vom %s geladen", created)
         await self.refresh_dhw_profile()
+        await self.refresh_household_profile()
 
     @property
     def om(self) -> OpenMeteo:
@@ -99,6 +104,58 @@ class ForecastService:
             self.profile = prof
         log.info("WW-Profil: %s", self.profile.summary())
 
+    # ---------------------------------------------------------------- household
+    async def refresh_household_profile(self):
+        hs, e = self.s.household, self.s.entities
+        if not hs.enabled:
+            return
+        today = datetime.now(self.tz).date()
+        ids = [e.household_power] + ([e.hp_power] if hs.correct_hp_share else [])
+        corr = max(self.params.power_correction - 1.0, 0.0) if hs.correct_hp_share else 0.0
+        end = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+        days: dict = {}
+        # hourly long-term statistics (kept forever) first, then 5-min short-term (≈10 days)
+        for period, step, back in (("hour", 60, 21), ("5minute", 5, 10)):
+            try:
+                st = await self.ha.statistics(ids, end - timedelta(days=back), end,
+                                              period=period, types=("mean",))
+            except Exception as ex:  # noqa: BLE001
+                log.warning("Haushalts-Statistik (%s) nicht abrufbar: %s", period, ex)
+                continue
+            hp = {r["start"]: r.get("mean") for r in st.get(e.hp_power, [])}
+            rows = []
+            for r in st.get(e.household_power, []):
+                w = r.get("mean")
+                if w is None:
+                    continue
+                w = w - corr * (hp.get(r["start"]) or 0.0)
+                rows.append((r["start"], max(w, 0.0) / 1000))
+            for d, v in extras.daily_slots(rows, self.tz, step).items():
+                if period == "5minute" and v[1].sum() < 0.9 * 1440 and d in days:
+                    continue          # keep the complete hourly day
+                days[d] = v
+        self.household = extras.build_household_profile(
+            days, today, hs.days, hs.aggregate, hs.split_weekend)
+        self._household_date = today
+        log.info("Haushaltsprofil: %s", self.household.summary())
+
+    async def _pv(self, ftimes: list[datetime]):
+        n = len(ftimes)
+        if not self.s.pv.enabled:
+            return np.full(n, np.nan), np.full(n, np.nan), np.full(n, np.nan)
+        data = {"config_entry_id": self.s.pv.config_entry_id} if self.s.pv.config_entry_id else {}
+        try:
+            resp = await self.ha.call_service(self.s.pv.service, data)
+            pv = extras.parse_pv_forecast(resp)
+            kw, lo, hi = extras.pv_for_slots(pv, ftimes)
+            self.pv_status = {"enabled": True, "ok": True, "points": len(pv),
+                              "covered_slots": int(np.isfinite(kw).sum()), "slots": n}
+            return kw, lo, hi
+        except Exception as ex:  # noqa: BLE001
+            log.warning("PV-Prognose nicht abrufbar: %s", ex)
+            self.pv_status = {"enabled": True, "ok": False, "error": str(ex)}
+            return np.full(n, np.nan), np.full(n, np.nan), np.full(n, np.nan)
+
     # ---------------------------------------------------------------- forecast
     async def _weather_now(self, past_h: int) -> WeatherSeries:
         try:
@@ -111,16 +168,51 @@ class ForecastService:
                 return self._weather
             raise
 
-    async def _curves(self) -> list[CurvePoints]:
-        out = []
+    async def _circuit_states(self) -> tuple[list[CurvePoints | FixedFlow], list[dict]]:
+        """Flow set point providers of all active circuits + info for the API."""
+        providers, info = [], []
+        inactive = {x.upper() for x in self.s.inactive_states}
         for c in self.s.circuits:
-            vals = [await self.ha.float_state(e) for e in (c.curve_cold, c.curve_mid, c.curve_warm)]
-            if any(v is None for v in vals):
-                log.warning("Heizkurve %s unvollständig, übersprungen", c.name)
+            row = {"name": c.name, "mode": c.mode, "active": False}
+            state = None
+            if c.state:
+                st = await self.ha.state(c.state)
+                state = (st or {}).get("state")
+                row["state"] = state
+            if state and str(state).upper() in inactive:
+                row["reason"] = "Betriebsstatus inaktiv"
+                info.append(row)
                 continue
-            off = await self.ha.float_state(c.offset) if c.offset else 0.0
-            out.append(CurvePoints(*vals, offset=off or 0.0))
-        return out
+            target = await self.ha.float_state(c.target_flow) if c.target_flow else None
+            row["target_flow_now"] = target
+            prov = None
+            if c.mode == "target":
+                if target is not None and target > 0:
+                    prov = FixedFlow(target)
+                else:
+                    row["reason"] = "kein Sollwert"
+            else:
+                vals = [await self.ha.float_state(e) if e else None
+                        for e in (c.curve_cold, c.curve_mid, c.curve_warm)]
+                if all(v is not None for v in vals):
+                    off = await self.ha.float_state(c.offset) if c.offset else 0.0
+                    prov = CurvePoints(*vals, offset=off or 0.0)
+                elif target is not None and target > 0:
+                    prov = FixedFlow(target)
+                    row["reason"] = "Heizkurve unvollständig, nutze aktuellen Sollwert"
+                else:
+                    row["reason"] = "Heizkurve unvollständig"
+            if prov is not None:
+                row["active"] = True
+                row["setpoint"] = asdict(prov)
+                providers.append(prov)
+            info.append(row)
+        if not providers:
+            log.warning("Kein aktiver Heizkreis – Vorlauf fällt auf 35 °C zurück")
+        return providers, info
+
+    async def _curves(self) -> list[CurvePoints | FixedFlow]:
+        return (await self._circuit_states())[0]
 
     async def run_once(self) -> dict:
         async with self._lock:
@@ -163,9 +255,21 @@ class ForecastService:
         sl = slice(i0, i0 + n)
         ftimes = times[sl]
         q_dhw = np.array([self.profile.kw_at(t.astimezone(self.tz)) for t in ftimes])
-        curves = await self._curves()
+        curves, circuit_info = await self._circuit_states()
         out = run(ForecastInputs(ftimes, temp_c[sl], t_damp[sl], w.rh[sl], w.gti_sum()[sl], q_dhw, curves),
                   self.params)
+        # electricity balance: PV (Helios) and household base load
+        if self.s.household.enabled and self._household_date != datetime.now(self.tz).date():
+            try:
+                await self.refresh_household_profile()
+            except Exception as ex:  # noqa: BLE001
+                log.warning("Haushaltsprofil nicht aktualisiert: %s", ex)
+        pv_kw, pv_lo, pv_hi = await self._pv(ftimes)
+        hh = (np.array([self.household.kw_at(t.astimezone(self.tz)) for t in ftimes])
+              if self.s.household.enabled else np.full(len(ftimes), np.nan))
+        out["pv_kw"], out["pv_p10"], out["pv_p90"] = pv_kw, pv_lo, pv_hi
+        out["household_kw"] = hh
+        out["net_kw"] = out["p_el_kw"] + hh - pv_kw     # > 0 grid/battery/CHP needed, < 0 surplus
 
         rows = []
         for k, t in enumerate(ftimes):
@@ -184,8 +288,10 @@ class ForecastService:
                         "local_bias_k": round(bias, 2)},
             "location": {"latitude": self.lat, "longitude": self.lon},
             "params": {k: _r(v, 5) if not isinstance(v, list) else v for k, v in asdict(self.params).items()},
-            "heating_curves": [asdict(c) for c in curves],
+            "circuits": circuit_info,
             "dhw_profile": self.profile.summary(),
+            "household_profile": self.household.summary(),
+            "pv": self.pv_status,
             "units": {"power": "kW (Mittel je Slot)", "temperature": "°C", "gti": "W/m²", "slot": "15 min"},
             "series": rows,
             "summary": self._summary(ftimes, out),
@@ -209,23 +315,36 @@ class ForecastService:
         for k, t in enumerate(ftimes):
             d = t.astimezone(self.tz).date().isoformat()
             e = days.setdefault(d, {"q_heat_kwh": 0.0, "q_dhw_kwh": 0.0, "p_el_kwh": 0.0,
-                                    "p_backup_kwh": 0.0, "slots": 0, "frost_slots": 0})
+                                    "p_backup_kwh": 0.0, "pv_kwh": 0.0, "household_kwh": 0.0,
+                                    "net_import_kwh": 0.0, "surplus_kwh": 0.0,
+                                    "slots": 0, "frost_slots": 0, "pv_missing_slots": 0})
             e["q_heat_kwh"] += out["q_heat_kw"][k] * 0.25
             e["q_dhw_kwh"] += out["q_dhw_kw"][k] * 0.25
             e["p_el_kwh"] += out["p_el_kw"][k] * 0.25
             e["p_backup_kwh"] += out["p_backup_kw"][k] * 0.25
+            pv, hh, net = out["pv_kw"][k], out["household_kw"][k], out["net_kw"][k]
+            e["pv_kwh"] += 0.0 if np.isnan(pv) else pv * 0.25
+            e["pv_missing_slots"] += int(np.isnan(pv))
+            e["household_kwh"] += 0.0 if np.isnan(hh) else hh * 0.25
+            if np.isfinite(net):
+                e["net_import_kwh"] += max(net, 0.0) * 0.25
+                e["surplus_kwh"] += max(-net, 0.0) * 0.25
             e["slots"] += 1
             e["frost_slots"] += int(out["frost_risk"][k])
         for e in days.values():
             q = e["q_heat_kwh"] + e["q_dhw_kwh"]
             e["cop_system"] = round(q / e["p_el_kwh"], 2) if e["p_el_kwh"] > 0 else None
             e["complete_day"] = e["slots"] == 96
-            for k in ("q_heat_kwh", "q_dhw_kwh", "p_el_kwh", "p_backup_kwh"):
+            for k in ("q_heat_kwh", "q_dhw_kwh", "p_el_kwh", "p_backup_kwh", "pv_kwh",
+                      "household_kwh", "net_import_kwh", "surplus_kwh"):
                 e[k] = round(e[k], 2)
         nxt = slice(0, 4)
         return {"days": days,
                 "next_hour": {"q_total_kw": _r(out["q_total_kw"][nxt].mean()),
-                              "p_el_kw": _r(out["p_el_kw"][nxt].mean())}}
+                              "p_el_kw": _r(out["p_el_kw"][nxt].mean()),
+                              "pv_kw": _r(np.nanmean(out["pv_kw"][nxt])) if np.isfinite(out["pv_kw"][nxt]).any() else None,
+                              "household_kw": _r(np.nanmean(out["household_kw"][nxt])) if np.isfinite(out["household_kw"][nxt]).any() else None,
+                              "net_kw": _r(np.nanmean(out["net_kw"][nxt])) if np.isfinite(out["net_kw"][nxt]).any() else None}}
 
     # ---------------------------------------------------------------- HA sensors
     async def _publish(self, res: dict):
@@ -243,6 +362,11 @@ class ForecastService:
         for (d, e), lab in zip(days, labels):
             items.append(energy(f"waerme_{lab}", round(e["q_heat_kwh"] + e["q_dhw_kwh"], 1), d))
             items.append(energy(f"strom_{lab}", round(e["p_el_kwh"], 1), d))
+            if self.s.household.enabled:
+                items.append(energy(f"haushalt_{lab}", round(e["household_kwh"], 1), d))
+            if self.s.pv.enabled:
+                items.append(energy(f"pv_{lab}", round(e["pv_kwh"], 1), d))
+            items.append(energy(f"netzbedarf_{lab}", round(e["net_import_kwh"], 1), d))
         items.append(("sensor.waermeprognose_waerme_naechste_stunde", nh["q_total_kw"],
                       {**base, "unit_of_measurement": "kW", "device_class": "power",
                        "friendly_name": "Wärmeprognose Wärme nächste Stunde"}))

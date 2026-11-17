@@ -16,7 +16,8 @@ from .settings import Settings, load_settings
 log = logging.getLogger(__name__)
 
 AGG_MEAN = ("t_out", "t_damped", "gti", "q_heat_kw", "q_dhw_kw", "q_total_kw", "flow_temp",
-            "p_el_kw", "p_backup_kw", "q_heat_p10", "q_heat_p90", "p_el_p10", "p_el_p90")
+            "p_el_kw", "p_backup_kw", "q_heat_p10", "q_heat_p90", "p_el_p10", "p_el_p90",
+            "pv_kw", "pv_p10", "pv_p90", "household_kw", "net_kw")
 AGG_ANY = ("frost_risk", "below_min_modulation")
 
 
@@ -122,6 +123,10 @@ def create_app(settings: Settings | None = None, service: ForecastService | None
         s = svc()
         return {"settings": s.s.public_dict(), "active_params": s.params.__dict__,
                 "calibration": s.calibration_info, "dhw_profile": s.profile.summary(),
+                "household_profile": s.household.summary(),
+                "household_profile_kw": {
+                    k: None if v is None else [None if x != x else round(float(x), 3) for x in v]
+                    for k, v in (("workday", s.household.workday), ("weekend", s.household.weekend))},
                 "dhw_profile_kw": {"workday": [round(float(x), 3) for x in s.profile.workday],
                                    "weekend": None if s.profile.weekend is None else
                                    [round(float(x), 3) for x in s.profile.weekend]}}

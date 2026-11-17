@@ -1,7 +1,8 @@
 # Wärmeprognose
 
 Prognose von Wärmebedarf (Heizung inkl. Pool + Warmwasser), Vorlauftemperatur, COP und
-Stromaufnahme der Wärmepumpe im 15-Minuten-Raster für 48–72 h. Läuft alle 15 Minuten,
+Stromaufnahme der Wärmepumpe – zusammen mit PV-Ertrag (Helios Forecast), Haushaltslast und
+Netto-Strombedarf – im 15-Minuten-Raster für 48–72 h. Läuft alle 15 Minuten,
 kalibriert sich nachts selbst und stellt das Ergebnis per REST-API bereit.
 
 ## Rechenkette
@@ -12,9 +13,37 @@ kalibriert sich nachts selbst und stellt das Ergebnis per REST-API bereit.
 | Gedämpfte Temperatur | exponentielle Glättung, `damping_hours` (12 h) |
 | Heizlast | `q = q_base + slope·Td + knee_slope·max(0, knee − Td) − solar·GTI` |
 | Warmwasser | Viertelstundenprofil aus Lambda-Trendlogs (`/share/waermeprognose/`) und/oder HA-Statistik |
-| Vorlauf | höchster Heizkurven-Sollwert der Heizkreise (live aus HA) + `flow_offset_hp`; Warmwasser `flow_dhw` |
+| Vorlauf | höchster Sollwert aller **aktiven** Heizkreise (siehe unten) + `flow_offset_hp`; Warmwasser `flow_dhw` |
 | COP | `η · (T_VL + 273,15) / (T_VL − T_Quelle)`, `T_Quelle = T_außen + source_temp_offset`; η = `eta_frost` bei T_Quelle ≤ `frost_threshold` |
 | Strom | `Q / COP · power_correction`; Wärme oberhalb der Maximalleistung (Datenblatt) → Heizstab mit COP 1 |
+| PV | Aktion `helios_forecast.get_forecast` (15-min, W → kW, P10/P90) |
+| Haushalt | Mittel (oder Median) der letzten 3 vollständigen Werktage bzw. Wochenendtage je Viertelstunde |
+| Netto | `net_kw = p_el_kw + household_kw − pv_kw` (> 0 Bedarf aus Netz/Batterie/BHKW, < 0 Überschuss) |
+
+### Heizkreise
+
+Jeder Heizkreis hat einen Modus:
+
+- `curve`: Sollwert aus den Heizkurven-Stützpunkten (−22/0/+22 °C) + Offset, gerechnet mit der
+  prognostizierten gedämpften Außentemperatur (Standard für HC1, HC2, HC4).
+- `target`: der aktuelle Sollwert aus `target_flow` wird über den Horizont gehalten
+  (Standard für HC3/Pool, der fest mit 30 °C fährt statt nach Heizkurve).
+
+Kreise, deren Betriebsstatus (`state`) in `inactive_states` steht (z. B. `RELEASE-OFF`,
+`CH-SUMMER`, `OFF`), oder ohne Sollwert > 0 werden ignoriert. Der Status wird bei jedem Lauf neu
+gelesen und gilt für den ganzen Horizont. Die API zeigt unter `circuits` je Kreis, ob und mit
+welchem Sollwert er berücksichtigt wurde.
+
+Die **Wärmemenge** aller vier Kreise steckt bereits im Heizwärmezähler der Wärmepumpe und damit
+in der kalibrierten Heizlast; getrennte Wärmemengen je Kreis gibt es mangels eigener Zähler nicht.
+
+### Haushaltslast
+
+Quelle ist `entities.household_power` (Standard `sensor.hausverbrauch_ohne_warmepumpe`, also
+ohne Wärmepumpe und ohne Wallbox). Mit `correct_hp_share` wird zusätzlich
+`(power_correction − 1) × entities.hp_power` abgezogen, weil der Regler-Stromwert der
+Wärmepumpe rund 7 % zu niedrig ist. Daten: 5-min-Statistik (≈ 10 Tage), ältere Tage aus der
+Stundenstatistik. Das Profil wird täglich neu gebildet.
 
 ### Startwerte (aus Messdaten 11.–16.11.2026)
 
@@ -68,13 +97,17 @@ Interaktive Doku: `http://<HA-IP>:8099/docs`.
 
 Felder je Slot (`series[]`): `t` (Slot-Beginn, lokal), `t_out`, `t_damped`, `gti`,
 `q_heat_kw`, `q_dhw_kw`, `q_total_kw`, `flow_temp`, `cop_heat`, `cop_dhw`, `cop_system`,
-`p_el_kw`, `p_backup_kw`, `frost_risk`, `below_min_modulation`, `q_heat_p10/p90`, `p_el_p10/p90`.
+`p_el_kw`, `p_backup_kw`, `frost_risk`, `below_min_modulation`, `q_heat_p10/p90`, `p_el_p10/p90`,
+`pv_kw`, `pv_p10/p90` (fehlende Bänder = Mittelwert), `household_kw`, `net_kw`.
+Tagessummen zusätzlich: `pv_kwh`, `household_kwh`, `net_import_kwh`, `surplus_kwh`.
 Leistungen sind Mittelwerte über den Slot (kW); Energie = kW × 0,25 h.
 
 ## Sensoren in Home Assistant
 
 `sensor.waermeprognose_waerme_heute_rest`, `…_morgen`, `…_uebermorgen`,
 `sensor.waermeprognose_strom_heute_rest`, `…_morgen`, `…_uebermorgen` (kWh),
+`sensor.waermeprognose_haushalt_*`, `sensor.waermeprognose_pv_*`,
+`sensor.waermeprognose_netzbedarf_*` (gleiche Tage, kWh),
 `sensor.waermeprognose_waerme_naechste_stunde`, `sensor.waermeprognose_strom_naechste_stunde` (kW),
 `sensor.waermeprognose_status`.
 Die Sensoren werden über die REST-API gesetzt (keine Registry-Einträge) und sind nach einem
@@ -85,5 +118,6 @@ HA-Neustart bis zum nächsten Lauf (≤ 15 min) leer.
 - Heizlast ist nach 6 Tagen Betrieb kaum identifizierbar; die Kalibrierung wird mit jeder
   Woche besser, verlässliche Werte für Frost erst nach echten Frosttagen.
 - Pool, Lüftung und Hauskreise sind gemeinsam modelliert (wie gewünscht).
+- Der Netto-Bedarf berücksichtigt weder Batterie noch BHKW noch Wallbox – das plant der Optimierer.
 - Takten unterhalb der Mindestmodulation (`below_min_modulation`) wird nur markiert,
   nicht mit einem COP-Abschlag versehen.
