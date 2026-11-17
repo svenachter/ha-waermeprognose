@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2 – 2026-11-17
+
+- Build robuster bei langsamer Verbindung: alle 22 Pakete fest gepinnt (kein Backtracking),
+  nur Binär-Wheels, pip-Timeout 120 s mit 10 Wiederholungen, Installation bis zu 3× wiederholt.
+
 ## 0.1.1 – 2026-11-17
 
 - Build-Fehler behoben: Python-Basis-Image fest im Dockerfile, `build.yaml` entfernt
