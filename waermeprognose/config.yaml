@@ -1,0 +1,122 @@
+name: Wärmeprognose
+version: "0.1.0"
+slug: waermeprognose
+description: >-
+  Wärme- und Strombedarfsprognose für die Wärmepumpe (15-min-Raster, 48–72 h)
+  aus open-meteo, Heizkurve und Warmwasser-Historie – abrufbar per REST-API.
+url: https://github.com/svenachter/ha-waermeprognose
+arch:
+  - amd64
+  - aarch64
+init: false
+startup: application
+boot: auto
+homeassistant_api: true
+ports:
+  8099/tcp: 8099
+ports_description:
+  8099/tcp: REST-API der Wärmeprognose
+watchdog: http://[HOST]:[PORT:8099]/api/v1/health
+map:
+  - type: share
+    read_only: true
+options:
+  horizon_hours: 48
+  weather_model: best_match
+  facades:
+    - name: sued
+      tilt: 90
+      azimuth: 0
+  entities:
+    outdoor_temp: sensor.eu20l_ambient_temperature_1h
+    heat_thermal: sensor.eu20l_hp1_heating_thermal_energy_total
+    heat_electric: sensor.eu20l_hp1_heating_energy_total
+    dhw_thermal: sensor.eu20l_hp1_hot_water_thermal_energy_total
+    dhw_electric: sensor.eu20l_hp1_hot_water_energy_total
+    hp_flow: sensor.eu20l_hp1_flow_line_temperature
+  circuits:
+    - name: HC1
+      curve_cold: number.eu20l_hc1_heating_curve_cold_outside_temp_number
+      curve_mid: number.eu20l_hc1_heating_curve_mid_outside_temp_number
+      curve_warm: number.eu20l_hc1_heating_curve_warm_outside_temp_number
+      offset: number.eu20l_hc1_flow_line_offset_temperature_number
+    - name: HC2
+      curve_cold: number.eu20l_hc2_heating_curve_cold_outside_temp_number
+      curve_mid: number.eu20l_hc2_heating_curve_mid_outside_temp_number
+      curve_warm: number.eu20l_hc2_heating_curve_warm_outside_temp_number
+      offset: number.eu20l_hc2_flow_line_offset_temperature_number
+  model:
+    eta: 0.56
+    eta_frost: 0.51
+    frost_threshold: 4.0
+    source_temp_offset: 1.5
+    power_correction: 1.07
+    flow_offset_hp: -3.0
+    flow_dhw: 48.0
+    damping_hours: 12.0
+    q_base_kw: 7.2
+    q_slope_kw_per_k: -0.05
+    knee_temp: -3.0
+    knee_slope_kw_per_k: 1.76
+    solar_gain_kw_per_wm2: 0.0
+    q_min_kw: 8.7
+    uncertainty: 0.15
+  dhw:
+    source: both
+    logfile_glob: /share/waermeprognose/*.xlsx
+    history_days: 28
+  calibration:
+    enabled: true
+    hour: 3
+    prior_hours: 72
+  publish_sensors: true
+  log_level: info
+schema:
+  api_token: password?
+  latitude: float?
+  longitude: float?
+  horizon_hours: int(12,72)
+  weather_model: str
+  facades:
+    - name: str
+      tilt: float(0,90)
+      azimuth: float(-180,180)
+  entities:
+    outdoor_temp: str
+    heat_thermal: str
+    heat_electric: str
+    dhw_thermal: str
+    dhw_electric: str
+    hp_flow: str
+  circuits:
+    - name: str
+      curve_cold: str
+      curve_mid: str
+      curve_warm: str
+      offset: str?
+  model:
+    eta: float(0.3,0.75)
+    eta_frost: float(0.3,0.75)
+    frost_threshold: float
+    source_temp_offset: float
+    power_correction: float(0.8,1.5)
+    flow_offset_hp: float
+    flow_dhw: float(35,65)
+    damping_hours: float(1,72)
+    q_base_kw: float
+    q_slope_kw_per_k: float
+    knee_temp: float
+    knee_slope_kw_per_k: float
+    solar_gain_kw_per_wm2: float
+    q_min_kw: float
+    uncertainty: float(0,1)
+  dhw:
+    source: list(logfile|ha_statistics|both)
+    logfile_glob: str
+    history_days: int(7,120)
+  calibration:
+    enabled: bool
+    hour: int(0,23)
+    prior_hours: int(0,2000)
+  publish_sensors: bool
+  log_level: list(debug|info|warning|error)

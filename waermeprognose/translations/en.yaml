@@ -1,0 +1,33 @@
+configuration:
+  api_token:
+    name: API token
+    description: Bearer token / X-API-Key for the REST API. Empty = no auth.
+  latitude:
+    name: Latitude
+    description: Leave empty to use Home Assistant's location.
+  longitude:
+    name: Longitude
+    description: Leave empty to use Home Assistant's location.
+  horizon_hours:
+    name: Forecast horizon (h)
+  weather_model:
+    name: Weather model (open-meteo)
+  facades:
+    name: Facades for solar gains
+    description: Tilt (90 = vertical), azimuth in open-meteo convention (0 = south).
+  entities:
+    name: Home Assistant entities
+  circuits:
+    name: Heating circuits
+  model:
+    name: Model parameters
+  dhw:
+    name: Domestic hot water
+  calibration:
+    name: Calibration
+  publish_sensors:
+    name: Publish sensors to Home Assistant
+  log_level:
+    name: Log level
+network:
+  8099/tcp: REST API

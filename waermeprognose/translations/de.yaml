@@ -1,0 +1,48 @@
+configuration:
+  api_token:
+    name: API-Token
+    description: >-
+      Token für die REST-API (Header "Authorization: Bearer <token>" oder "X-API-Key").
+      Leer = keine Authentifizierung (nur im vertrauenswürdigen Heimnetz).
+  latitude:
+    name: Breitengrad
+    description: Leer lassen, um die Home-Assistant-Koordinaten zu verwenden.
+  longitude:
+    name: Längengrad
+    description: Leer lassen, um die Home-Assistant-Koordinaten zu verwenden.
+  horizon_hours:
+    name: Prognosehorizont (h)
+    description: 12–72 h. open-meteo liefert für Mitteleuropa native 15-min-Daten für etwa 3 Tage.
+  weather_model:
+    name: Wettermodell (open-meteo)
+    description: z. B. best_match, icon_seamless, icon_d2
+  facades:
+    name: Fassaden für Solargewinne
+    description: >-
+      Neigung (90 = senkrecht) und Azimut nach open-meteo-Konvention
+      (0 = Süd, -90 = Ost, 90 = West).
+  entities:
+    name: Home-Assistant-Entitäten
+    description: Außentemperatur und kumulierte Energiezähler (kWh) der Wärmepumpe.
+  circuits:
+    name: Heizkreise
+    description: >-
+      Heizkurven-Stützpunkte (-22/0/+22 °C) und Offset je Heizkreis. Die Wärmepumpe
+      fährt den höchsten Sollwert der aufgeführten Kreise.
+  model:
+    name: Modellparameter
+    description: Startwerte; Heizlast-Parameter werden nachts nachkalibriert.
+  dhw:
+    name: Warmwasser
+    description: >-
+      Quelle des Warmwasserprofils: Lambda-Trendlog-Dateien (xlsx/csv) unter /share,
+      Home-Assistant-Statistik oder beides.
+  calibration:
+    name: Kalibrierung
+    description: Nächtliche Neuschätzung der Heizlast aus der HA-Historie.
+  publish_sensors:
+    name: Sensoren in Home Assistant anlegen
+  log_level:
+    name: Log-Level
+network:
+  8099/tcp: REST-API
