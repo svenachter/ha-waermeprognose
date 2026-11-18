@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0 – 2026-11-18
+
+- Abgleich Prognose ↔ Ist für die letzten 48 h, Stunde für Stunde: Wärme (Heizung + WW),
+  WP-Strom, PV und Haushalt mit prozentualer Abweichung. Es wird die gespeicherte Prognose
+  genutzt, deren Vorlauf `compare.lead_hours` (Standard 24 h) am nächsten kommt, mindestens
+  `compare.min_lead_hours` (1 h).
+- Neuer Endpunkt `GET /api/v1/compare?hours=48&lead_hours=24` und Sensor
+  `sensor.waermeprognose_abgleich` (Zustand = Wärme-Abweichung der 48 h in %, Attribute
+  `summary` und `rows`), stündlich aktualisiert.
+- Gespeicherte Stundenprognosen enthalten jetzt auch PV und Haushalt (Datenbank wird beim Start
+  automatisch erweitert; ältere Einträge haben dort keine Werte).
+
 ## 0.2.1 – 2026-11-18
 
 - Neuer Sensor `sensor.waermeprognose_zeitreihe`: Attribut `forecast` mit 48 Stundenwerten

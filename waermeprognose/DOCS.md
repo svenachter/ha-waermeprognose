@@ -90,6 +90,7 @@ Ohne gesetztes Token ist die API offen – nur im vertrauenswürdigen Heimnetz v
 | GET | `/api/v1/forecast/summary` | Tagessummen (kWh), nächste Stunde |
 | GET | `/api/v1/params` | aktive Parameter, Kalibrierung, Warmwasserprofil |
 | GET | `/api/v1/backtest?days=7&lead_hours=24` | Prognose (mit Vorlauf) gegen Ist je Tag |
+| GET | `/api/v1/compare?hours=48&lead_hours=24` | Stündlich: gespeicherte Prognose gegen Ist mit Abweichung in % |
 | POST | `/api/v1/refresh` | Prognose sofort neu rechnen |
 | POST | `/api/v1/calibrate` | Kalibrierung sofort ausführen |
 
@@ -115,6 +116,25 @@ Leistungen sind Mittelwerte über den Slot (kW); Energie = kW × 0,25 h.
 `cop`, `wp` Strom WP kW, `hh` Haushalt kW, `pv` PV kW, `net` Netto kW, `frost`).
 Die Sensoren werden über die REST-API gesetzt (keine Registry-Einträge) und sind nach einem
 HA-Neustart bis zum nächsten Lauf (≤ 15 min) leer.
+
+## Abgleich Prognose ↔ Ist
+
+Für jede der letzten `compare.hours` Stunden wird aus der Datenbank die Prognose gewählt, deren
+Vorlauf am nächsten an `compare.lead_hours` liegt (Standard 24 h = „wie am Vortag vorhergesagt“),
+aber mindestens `compare.min_lead_hours` vor Stundenbeginn erstellt wurde. Verglichen werden:
+
+| Größe | Ist-Wert |
+|---|---|
+| Wärme | Heizwärme- + WW-Wärmezähler (Änderung je Stunde) |
+| WP-Strom | Heiz- + WW-Stromzähler × `power_correction` (gleiche Basis wie die Prognose) |
+| PV | Stundenmittel von `entities.pv_power` |
+| Haushalt | Stundenmittel von `entities.household_power` (mit WP-Korrektur wie im Profil) |
+
+Abweichung = Prognose / Ist − 1. Bei sehr kleinen Ist-Werten (Wärme < 0,2 kWh, sonst
+< 0,05 kWh, z. B. PV nachts) wird keine Prozentzahl ausgewiesen. Die Zusammenfassung enthält
+die Summen-Abweichung und die mittlere absolute Stundenabweichung. Sensor:
+`sensor.waermeprognose_abgleich` (stündlich aktualisiert). Nach der Installation dauert es
+`lead_hours` Stunden, bis die ersten Vergleiche mit diesem Vorlauf möglich sind.
 
 ## Grenzen
 

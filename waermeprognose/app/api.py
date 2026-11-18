@@ -103,6 +103,12 @@ def create_app(settings: Settings | None = None, service: ForecastService | None
     async def backtest(days: int = Query(default=7, ge=1, le=14), lead_hours: int = Query(default=24, ge=0, le=48)):
         return await svc().backtest(days, lead_hours)
 
+    @app.get("/api/v1/compare", dependencies=[Depends(auth)])
+    async def compare(hours: int = Query(default=48, ge=1, le=336),
+                      lead_hours: float = Query(default=24.0, ge=0, le=72)):
+        """Stored forecast (lead closest to lead_hours) vs. measured values, hour by hour."""
+        return await svc().compare_hourly(hours, lead_hours)
+
     @app.post("/api/v1/refresh", dependencies=[Depends(auth)])
     async def refresh():
         try:

@@ -23,21 +23,31 @@ class Store:
                 CREATE INDEX IF NOT EXISTS fc_target ON fc_hourly(target);
                 CREATE TABLE IF NOT EXISTS params (created INTEGER PRIMARY KEY, data TEXT, info TEXT);
             """)
+            cols = {r[1] for r in self.db.execute("PRAGMA table_info(fc_hourly)")}
+            for col in ("pv", "hh"):          # added in 0.3.0
+                if col not in cols:
+                    self.db.execute(f"ALTER TABLE fc_hourly ADD COLUMN {col} REAL")
             self.db.commit()
 
-    def save_forecast(self, issued: datetime, hourly: list[tuple[datetime, float, float, float]]):
+    def save_forecast(self, issued: datetime, hourly: list[tuple]):
+        """hourly: (hour start, q_heat kWh, q_dhw kWh, p_el kWh, pv kWh | None, household kWh | None)"""
         ts = int(issued.timestamp())
+        rows = []
+        for h in hourly:
+            t, qh, qd, pe, *rest = h
+            pv, hh = (list(rest) + [None, None])[:2]
+            rows.append((ts, int(t.timestamp()), qh, qd, pe, pv, hh))
         with self.lock:
             self.db.executemany(
-                "INSERT OR REPLACE INTO fc_hourly VALUES (?,?,?,?,?)",
-                [(ts, int(t.timestamp()), qh, qd, pe) for t, qh, qd, pe in hourly])
+                "INSERT OR REPLACE INTO fc_hourly (issued, target, q_heat, q_dhw, p_el, pv, hh) "
+                "VALUES (?,?,?,?,?,?,?)", rows)
             self.db.execute("DELETE FROM fc_hourly WHERE issued < ?", (ts - KEEP_DAYS * 86400,))
             self.db.commit()
 
     def forecasts_for(self, t_from: datetime, t_to: datetime) -> list[tuple]:
         with self.lock:
             cur = self.db.execute(
-                "SELECT issued, target, q_heat, q_dhw, p_el FROM fc_hourly "
+                "SELECT issued, target, q_heat, q_dhw, p_el, pv, hh FROM fc_hourly "
                 "WHERE target >= ? AND target < ? ORDER BY target, issued",
                 (int(t_from.timestamp()), int(t_to.timestamp())))
             return cur.fetchall()

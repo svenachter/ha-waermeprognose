@@ -198,3 +198,36 @@ def test_next_quarter():
     assert Scheduler.next_quarter(now, 60) == datetime(2026, 11, 17, 14, 16, tzinfo=timezone.utc)
     now = datetime(2026, 11, 17, 14, 16, 30, tzinfo=timezone.utc)
     assert Scheduler.next_quarter(now, 60) == datetime(2026, 11, 17, 14, 31, tzinfo=timezone.utc)
+
+
+def test_compare_hourly_picks_lead_and_computes_deviation(svc):
+    async def go():
+        await svc.startup()
+        end = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        for i in range(48):
+            h = end - timedelta(hours=48 - i)
+            # day-ahead forecast: heat +10 %, power -10 %, household exact
+            svc.store.save_forecast(h - timedelta(hours=24),
+                                    [(h, 11.0, 4.4, 14.98 * 0.9, 0.5, 1.73)])
+            # short-term forecast (2 h ahead) with different values
+            svc.store.save_forecast(h - timedelta(hours=2), [(h, 7.0, 7.0, 14.98, 0.5, 1.73)])
+        return await svc.compare_hourly(48, 24), await svc.compare_hourly(48, 0)
+    day_ahead, short = asyncio.run(go())
+    r = day_ahead["rows"][0]
+    assert r["lead_h"] == 24.0 and r["q_ist"] == 14.0 and r["q_dev"] == 10.0
+    assert r["p_dev"] == -10.0 and abs(r["hh_dev"]) < 0.1
+    assert r["pv_dev"] is None                      # actual PV 0.004 kWh -> below floor
+    s = day_ahead["summary"]
+    assert s["q"]["hours"] == 48 and s["q"]["dev_pct"] == 10.0 and s["q"]["mean_abs_dev_pct"] == 10.0
+    assert short["rows"][0]["lead_h"] == 2.0 and short["rows"][0]["q_dev"] == 0.0
+
+
+def test_compare_published_as_sensor(svc):
+    async def go():
+        await svc.startup()
+        await svc.run_once()
+    asyncio.run(go())
+    state, attrs = svc.ha.published["sensor.waermeprognose_abgleich"]
+    assert len(attrs["rows"]) == 48 and {"t", "lead", "qf", "qi", "qd", "pvd", "hhd"} <= attrs["rows"][0].keys()
+    import json
+    assert len(json.dumps(attrs)) < 16000

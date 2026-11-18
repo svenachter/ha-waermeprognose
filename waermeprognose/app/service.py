@@ -22,11 +22,22 @@ from .store import Store
 from .weather import OpenMeteo, WeatherSeries
 
 log = logging.getLogger(__name__)
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 CALIBRATED_FIELDS = ("q_base_kw", "q_slope_kw_per_k", "knee_slope_kw_per_k",
                      "solar_gain_kw_per_wm2", "uncertainty", "flow_offset_hp")
 BIAS_DECAY_H = 6.0
 WEATHER_MAX_AGE = timedelta(hours=6)
+
+
+def _sum_or_none(a) -> float | None:
+    a = np.asarray(a, float)
+    return None if not np.isfinite(a).any() else float(np.nansum(a) * 0.25)
+
+
+def _dev_pct(fc, ist, floor):
+    if fc is None or ist is None or abs(ist) < floor:
+        return None
+    return round((fc / ist - 1) * 100, 1)
 
 
 def _r(x, nd=3):
@@ -57,6 +68,8 @@ class ForecastService:
         self.calibration_info: dict | None = None
         self._weather: WeatherSeries | None = None
         self._weather_at: datetime | None = None
+        self._compare_hour: datetime | None = None
+        self.compare_result: dict | None = None
         self._lock = asyncio.Lock()
 
     # ---------------------------------------------------------------- setup
@@ -231,6 +244,15 @@ class ForecastService:
                     await self._publish(res)
                 except Exception as e:  # noqa: BLE001
                     log.warning("Sensoren nicht veröffentlicht: %s", e)
+            hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+            if self._compare_hour != hour:
+                try:
+                    self.compare_result = await self.compare_hourly()
+                    self._compare_hour = hour
+                    if self.s.publish_sensors:
+                        await self._publish_compare(self.compare_result)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("Abgleich Prognose/Ist fehlgeschlagen: %s", e)
             return res
 
     async def _run(self) -> dict:
@@ -280,7 +302,8 @@ class ForecastService:
             rows.append(row)
 
         hourly = self._hourly(ftimes, out)
-        self.store.save_forecast(now, [(h["start"], h["q_heat_kwh"], h["q_dhw_kwh"], h["p_el_kwh"]) for h in hourly])
+        self.store.save_forecast(now, [(h["start"], h["q_heat_kwh"], h["q_dhw_kwh"], h["p_el_kwh"],
+                                        h["pv_kwh"], h["hh_kwh"]) for h in hourly])
         return {
             "created_at": now.astimezone(self.tz).isoformat(),
             "model_version": VERSION,
@@ -308,6 +331,8 @@ class ForecastService:
                         "q_heat_kwh": float(out["q_heat_kw"][idx].sum() * 0.25),
                         "q_dhw_kwh": float(out["q_dhw_kw"][idx].sum() * 0.25),
                         "p_el_kwh": float(out["p_el_kw"][idx].sum() * 0.25),
+                        "pv_kwh": _sum_or_none(out["pv_kw"][idx]),
+                        "hh_kwh": _sum_or_none(out["household_kw"][idx]),
                         "slots": len(idx)})
         return res
 
@@ -382,6 +407,19 @@ class ForecastService:
             "forecast": compact_hourly(res["series"], hours=48)})
         await self._publish_status()
 
+    async def _publish_compare(self, cmp: dict):
+        rows = [{"t": r["t"], "lead": r["lead_h"],
+                 **{f"{k}{suf}": r[f"{k}_{suf2}"] for k in ("q", "p", "pv", "hh")
+                    for suf, suf2 in (("f", "fc"), ("i", "ist"), ("d", "dev"))}}
+                for r in cmp["rows"]]
+        q = cmp["summary"]["q"]
+        await self.ha.set_state("sensor.waermeprognose_abgleich",
+                                q["dev_pct"] if q["dev_pct"] is not None else "unknown", {
+            "friendly_name": "Wärmeprognose Abgleich Wärme", "icon": "mdi:scale-balance",
+            "unit_of_measurement": "%", "created_at": cmp["created_at"],
+            "hours": cmp["hours"], "lead_hours_preferred": cmp["lead_hours_preferred"],
+            "summary": cmp["summary"], "rows": rows})
+
     async def _publish_status(self):
         await self.ha.set_state("sensor.waermeprognose_status", "ok" if not self.last_error else "error", {
             "friendly_name": "Wärmeprognose Status", "icon": "mdi:heat-pump",
@@ -442,6 +480,78 @@ class ForecastService:
         log.info("Kalibrierung: %s", info)
         return info
 
+    # ---------------------------------------------------------------- forecast vs. actual
+    async def compare_hourly(self, hours: int | None = None, lead_h: float | None = None) -> dict:
+        """Hour by hour: stored forecast (lead ≈ lead_h) vs. measured values for the last hours."""
+        c, e = self.s.compare, self.s.entities
+        hours = int(hours or c.hours)
+        lead_h = c.lead_hours if lead_h is None else float(lead_h)
+        end = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        start = end - timedelta(hours=hours)
+        ids = [e.heat_thermal, e.dhw_thermal, e.heat_electric, e.dhw_electric,
+               e.pv_power, e.household_power, e.hp_power]
+        st = await self.ha.statistics(ids, start, end, period="hour", types=("change", "mean"))
+
+        def col(sid, key):
+            return {r["start"]: r.get(key) for r in st.get(sid, []) if r.get(key) is not None}
+
+        q_h, q_w = col(e.heat_thermal, "change"), col(e.dhw_thermal, "change")
+        p_h, p_w = col(e.heat_electric, "change"), col(e.dhw_electric, "change")
+        pv_w, hh_w, hp_w = col(e.pv_power, "mean"), col(e.household_power, "mean"), col(e.hp_power, "mean")
+        corr = self.params.power_correction
+        hh_corr = (corr - 1.0) if self.s.household.correct_hp_share else 0.0
+
+        best: dict[int, tuple] = {}
+        for row in self.store.forecasts_for(start, end):
+            issued, target = row[0], row[1]
+            lead = (target - issued) / 3600
+            if lead < c.min_lead_hours:
+                continue
+            if target not in best or abs(lead - lead_h) < abs(best[target][0] - lead_h):
+                best[target] = (lead, row)
+
+        rows = []
+        sums = {k: [0.0, 0.0, 0] for k in ("q", "p", "pv", "hh")}
+        devs = {k: [] for k in sums}
+        floors = {"q": 0.2, "p": 0.05, "pv": 0.05, "hh": 0.05}
+        for i in range(hours):
+            h = start + timedelta(hours=i)
+            ist = {
+                "q": (q_h[h] + q_w.get(h, 0.0)) if h in q_h else None,
+                "p": (p_h[h] + p_w.get(h, 0.0)) * corr if h in p_h else None,
+                "pv": pv_w[h] / 1000 if h in pv_w else None,
+                "hh": max(hh_w[h] - hh_corr * hp_w.get(h, 0.0), 0.0) / 1000 if h in hh_w else None,
+            }
+            b = best.get(int(h.timestamp()))
+            fc = {"q": None, "p": None, "pv": None, "hh": None}
+            issued = lead = None
+            if b:
+                lead, (iss, _t, qh, qd, pe, pv, hh) = b
+                issued = datetime.fromtimestamp(iss, tz=timezone.utc).astimezone(self.tz).isoformat()
+                fc = {"q": qh + qd, "p": pe, "pv": pv, "hh": hh}
+            row = {"t": h.astimezone(self.tz).isoformat(), "issued": issued,
+                   "lead_h": None if lead is None else round(lead, 1)}
+            for k in sums:
+                row[f"{k}_fc"] = None if fc[k] is None else round(fc[k], 2)
+                row[f"{k}_ist"] = None if ist[k] is None else round(ist[k], 2)
+                d = _dev_pct(fc[k], ist[k], floors[k])
+                row[f"{k}_dev"] = d
+                if fc[k] is not None and ist[k] is not None:
+                    sums[k][0] += fc[k]; sums[k][1] += ist[k]; sums[k][2] += 1
+                    if d is not None:
+                        devs[k].append(abs(d))
+            rows.append(row)
+        summary = {}
+        for k, (f, a, n) in sums.items():
+            summary[k] = {"hours": n, "fc_kwh": round(f, 1), "ist_kwh": round(a, 1),
+                          "dev_pct": _dev_pct(f, a, floors[k] * max(n, 1)) if n else None,
+                          "mean_abs_dev_pct": round(float(np.mean(devs[k])), 1) if devs[k] else None}
+        return {"created_at": datetime.now(self.tz).isoformat(), "hours": hours,
+                "lead_hours_preferred": lead_h, "min_lead_hours": c.min_lead_hours,
+                "units": "kWh je Stunde; Abweichung = Prognose/Ist − 1 in %",
+                "note": "WP-Strom Ist = Reglerzähler × power_correction; PV-Ist = entities.pv_power",
+                "summary": summary, "rows": rows}
+
     # ---------------------------------------------------------------- backtest
     async def backtest(self, days: int = 7, lead_h: int = 24) -> dict:
         end = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
@@ -456,7 +566,7 @@ class ForecastService:
                 a[key] += r.get("change") or 0.0
                 a["n"] += 1
         fc: dict[int, tuple] = {}
-        for issued, target, qh, qd, pe in self.store.forecasts_for(start, end):
+        for issued, target, qh, qd, pe, *_ in self.store.forecasts_for(start, end):
             if issued <= target - lead_h * 3600 + 900:
                 fc[target] = (qh + qd, pe)          # rows ordered by issued -> keep latest
         per_day: dict[str, dict] = {}

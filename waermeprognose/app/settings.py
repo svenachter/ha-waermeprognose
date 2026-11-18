@@ -25,6 +25,7 @@ class Entities:
     hp_flow: str = "sensor.eu20l_hp1_flow_line_temperature"
     household_power: str = "sensor.hausverbrauch_ohne_warmepumpe"   # W, house without HP
     hp_power: str = "sensor.warmepumpe_leistung"                    # W, controller value
+    pv_power: str = "sensor.e3dc_farm_pv_leistung"                  # W, actual PV (comparison)
 
 
 @dataclass
@@ -92,6 +93,13 @@ class HouseholdSettings:
 
 
 @dataclass
+class CompareSettings:
+    hours: int = 48              # look-back window
+    lead_hours: float = 24.0     # preferred forecast lead time ("as forecast the day before")
+    min_lead_hours: float = 1.0  # never use forecasts issued later than this before the hour
+
+
+@dataclass
 class CalibrationSettings:
     enabled: bool = True
     hour: int = 3
@@ -129,6 +137,7 @@ class Settings:
     calibration: CalibrationSettings = field(default_factory=CalibrationSettings)
     pv: PvSettings = field(default_factory=PvSettings)
     household: HouseholdSettings = field(default_factory=HouseholdSettings)
+    compare: CompareSettings = field(default_factory=CompareSettings)
     inactive_states: list[str] = field(default_factory=lambda: list(INACTIVE_STATES_DEFAULT))
     publish_sensors: bool = True
     log_level: str = "info"
@@ -175,6 +184,7 @@ def load_settings(path: str | os.PathLike | None = None) -> Settings:
     s.calibration = _merge(CalibrationSettings, raw.get("calibration"))
     s.pv = _merge(PvSettings, raw.get("pv"))
     s.household = _merge(HouseholdSettings, raw.get("household"))
+    s.compare = _merge(CompareSettings, raw.get("compare"))
     if raw.get("inactive_states"):
         s.inactive_states = [str(x).upper() for x in raw["inactive_states"]]
     s.data_dir = os.environ.get("DATA_DIR", str(path.parent))

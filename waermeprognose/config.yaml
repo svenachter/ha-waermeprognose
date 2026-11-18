@@ -1,5 +1,5 @@
 name: Wärmeprognose
-version: "0.2.1"
+version: "0.3.0"
 slug: waermeprognose
 description: >-
   Wärme- und Strombedarfsprognose für die Wärmepumpe plus PV (Helios) und
@@ -36,6 +36,7 @@ options:
     hp_flow: sensor.eu20l_hp1_flow_line_temperature
     household_power: sensor.hausverbrauch_ohne_warmepumpe
     hp_power: sensor.warmepumpe_leistung
+    pv_power: sensor.e3dc_farm_pv_leistung
   circuits:
     - name: HC1
       mode: curve
@@ -102,6 +103,10 @@ options:
     aggregate: mean
     split_weekend: true
     correct_hp_share: true
+  compare:
+    hours: 48
+    lead_hours: 24
+    min_lead_hours: 1
   inactive_states:
     - "OFF"
     - RELEASE-OFF
@@ -132,6 +137,7 @@ schema:
     hp_flow: str
     household_power: str?
     hp_power: str?
+    pv_power: str?
   circuits:
     - name: str
       mode: list(curve|target)?
@@ -175,6 +181,10 @@ schema:
     aggregate: list(mean|median)?
     split_weekend: bool?
     correct_hp_share: bool?
+  compare:
+    hours: int(6,336)?
+    lead_hours: float(0,72)?
+    min_lead_hours: float(0,24)?
   inactive_states:
     - str
   publish_sensors: bool
