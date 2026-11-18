@@ -137,6 +137,10 @@ def test_run_once_end_to_end(svc):
     assert "pv_kwh" in day and "household_kwh" in day and "net_import_kwh" in day
     assert "sensor.waermeprognose_haushalt_morgen" in svc.ha.published
     assert "sensor.waermeprognose_netzbedarf_morgen" in svc.ha.published
+    ts = svc.ha.published["sensor.waermeprognose_zeitreihe"][1]["forecast"]
+    assert len(ts) == 48 and {"t", "ta", "vl", "q", "cop", "wp", "hh", "pv", "net", "frost"} <= ts[0].keys()
+    import json
+    assert len(json.dumps(ts)) < 12000
     # hourly aggregates persisted for backtesting
     assert svc.store.forecasts_for(datetime.now(timezone.utc) - timedelta(hours=1),
                                    datetime.now(timezone.utc) + timedelta(days=3))

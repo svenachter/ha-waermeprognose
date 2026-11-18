@@ -13,6 +13,7 @@ import numpy as np
 
 from . import dhw as dhw_mod
 from . import extras
+from .aggregate import aggregate_hourly
 from .calibration import fit_flow_offset, fit_heat_model
 from .ha import HomeAssistant
 from .model import CurvePoints, FixedFlow, ForecastInputs, ema, run
@@ -21,7 +22,7 @@ from .store import Store
 from .weather import OpenMeteo, WeatherSeries
 
 log = logging.getLogger(__name__)
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 CALIBRATED_FIELDS = ("q_base_kw", "q_slope_kw_per_k", "knee_slope_kw_per_k",
                      "solar_gain_kw_per_wm2", "uncertainty", "flow_offset_hp")
 BIAS_DECAY_H = 6.0
@@ -375,6 +376,10 @@ class ForecastService:
                        "friendly_name": "Wärmeprognose Strom nächste Stunde"}))
         for eid, val, attrs in items:
             await self.ha.set_state(eid, val, attrs)
+        await self.ha.set_state("sensor.waermeprognose_zeitreihe", res["created_at"], {
+            "friendly_name": "Wärmeprognose Zeitreihe", "icon": "mdi:table-clock",
+            "device_class": "timestamp", "resolution": "60min",
+            "forecast": compact_hourly(res["series"], hours=48)})
         await self._publish_status()
 
     async def _publish_status(self):
@@ -471,6 +476,20 @@ class ForecastService:
             d["p_err_pct"] = round((d["p_fc"] / d["p_actual"] - 1) * 100, 1) if d["p_actual"] else None
         return {"lead_hours": lead_h, "days": per_day,
                 "note": "Prognosen werden erst ab Installation gespeichert; Abweichung = Prognose/Ist − 1"}
+
+
+def compact_hourly(series: list[dict], hours: int = 48) -> list[dict]:
+    """Hourly rows with short keys for a HA attribute (~6 kB for 48 h)."""
+    def r(v, nd=1):
+        return None if v is None else round(v, nd)
+    out = []
+    for h in aggregate_hourly(series)[:hours]:
+        out.append({"t": h["t"], "ta": r(h["t_out"]), "vl": r(h["flow_temp"]),
+                    "q": r(h["q_total_kw"]), "qh": r(h["q_heat_kw"]), "qw": r(h["q_dhw_kw"]),
+                    "cop": r(h["cop_system"], 2), "wp": r(h["p_el_kw"], 2),
+                    "hh": r(h["household_kw"], 2), "pv": r(h["pv_kw"], 2),
+                    "net": r(h["net_kw"], 2), "frost": bool(h["frost_risk"])})
+    return out
 
 
 class Scheduler:

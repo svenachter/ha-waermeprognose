@@ -109,7 +109,10 @@ Leistungen sind Mittelwerte über den Slot (kW); Energie = kW × 0,25 h.
 `sensor.waermeprognose_haushalt_*`, `sensor.waermeprognose_pv_*`,
 `sensor.waermeprognose_netzbedarf_*` (gleiche Tage, kWh),
 `sensor.waermeprognose_waerme_naechste_stunde`, `sensor.waermeprognose_strom_naechste_stunde` (kW),
-`sensor.waermeprognose_status`.
+`sensor.waermeprognose_status`,
+`sensor.waermeprognose_zeitreihe` (Zustand = Zeitpunkt der Prognose; Attribut `forecast` mit
+48 Stundenwerten: `t` Stunde, `ta` Außen °C, `vl` Vorlauf °C, `q`/`qh`/`qw` Wärme gesamt/Heizung/WW kW,
+`cop`, `wp` Strom WP kW, `hh` Haushalt kW, `pv` PV kW, `net` Netto kW, `frost`).
 Die Sensoren werden über die REST-API gesetzt (keine Registry-Einträge) und sind nach einem
 HA-Neustart bis zum nächsten Lauf (≤ 15 min) leer.
 

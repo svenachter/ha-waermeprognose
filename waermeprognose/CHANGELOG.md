@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1 – 2026-11-18
+
+- Neuer Sensor `sensor.waermeprognose_zeitreihe`: Attribut `forecast` mit 48 Stundenwerten
+  (t, ta, vl, q, qh, qw, cop, wp, hh, pv, net, frost) für Tabellen und Diagramme im Dashboard.
+
 ## 0.2.0 – 2026-11-17
 
 - Heizkreise HC3 (Pool, fester Sollwert) und HC4 (Lüftung) aufgenommen; neuer Modus je Kreis
