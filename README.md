@@ -4,6 +4,9 @@ Home-Assistant-App-Repository mit der App **Wärmeprognose** für die Lambda EU2
 Wärme-, COP- und Strombedarfsprognose im 15-Minuten-Raster, abrufbar per REST-API für einen
 nachgelagerten Optimierer. Details: [waermeprognose/DOCS.md](waermeprognose/DOCS.md).
 
+Außerdem die App **Lade-Assistent**: lernt Fahrverhalten und Standzeiten des E-Autos und meldet
+günstige PV-Ladefenster per Mobile App. Details: [ladeassistent/DOCS.md](ladeassistent/DOCS.md).
+
 ## Installation
 
 1. *Einstellungen → Apps → App-Store* → ⋮ → *Repositories*

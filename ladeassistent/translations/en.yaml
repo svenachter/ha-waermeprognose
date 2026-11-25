@@ -1,0 +1,24 @@
+configuration:
+  vehicle:
+    name: Vehicle
+    description: Display name, SoC (%), odometer, location tracker, optional car plug sensor, capacity (kWh), start consumption (kWh/km).
+  charger:
+    name: Charger
+    description: Plug sensor, charging power (W or kW), max and min charging power (kW).
+  energy:
+    name: Energy and prices
+    description: Entity with hourly forecast attribute (surplus = -net if inverted), grid price entity or fixed price (ct/kWh), feed-in tariff (ct/kWh).
+  policy:
+    name: Rules
+    description: Target/reserve SoC, urgency (days), min savings, min kWh, lead time, quiet hours, horizon, quantile, learning half-life, max notifications per day, snooze hours.
+  notify:
+    name: Notifications
+    description: Notify services, e.g. notify.mobile_app_my_phone.
+  poll_minutes:
+    name: Poll interval (min)
+  plan_minutes:
+    name: Planning interval (min)
+  bootstrap_days:
+    name: History on first start (days)
+  log_level:
+    name: Log level

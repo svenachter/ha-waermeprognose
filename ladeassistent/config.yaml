@@ -1,0 +1,110 @@
+name: Lade-Assistent
+version: "0.1.0"
+slug: ladeassistent
+description: >-
+  Lernender Lade-Assistent fürs E-Auto: lernt Fahrverhalten und Standzeiten,
+  sucht günstige PV-Fenster in den nächsten 48 h und meldet sich per App.
+url: https://github.com/svenachter/ha-waermeprognose
+arch:
+  - amd64
+  - aarch64
+init: false
+startup: application
+boot: auto
+homeassistant_api: true
+options:
+  vehicle:
+    name: IONIQ 5
+    soc: sensor.ioniq_5_ladestand_ev_batterie
+    odometer: sensor.ioniq_5_kilometerzahler
+    location: device_tracker.ioniq_5_ort
+    plugged: binary_sensor.ioniq_5_ev_ladeanschluss
+    capacity_kwh: 72.6
+    kwh_per_km: 0.2
+  charger:
+    plugged: binary_sensor.tiefgarage_easy_connect_plug
+    power: sensor.e3dc_2_wallbox_gesamt
+    power_unit: W
+    max_kw: 11
+    min_kw: 4.1
+  energy:
+    surplus_entity: sensor.waermeprognose_zeitreihe
+    surplus_attribute: forecast
+    surplus_time_key: t
+    surplus_key: net
+    surplus_invert: true
+    surplus_unit: kW
+    price_entity: sensor.strompreis_brutto_aktuell
+    price_unit: ct
+    price_ct: 30
+    feedin_ct: 8.3
+  policy:
+    target_soc: 80
+    reserve_soc: 15
+    urgent_days: 1.5
+    min_savings_eur: 1
+    min_kwh: 5
+    lead_hours: 16
+    quiet_start: "21:30"
+    quiet_end: "07:30"
+    horizon_hours: 48
+    quantile: 0.8
+    halflife_days: 28
+    max_per_day: 2
+    snooze_hours: 24
+  notify:
+    enabled: true
+    services:
+      - notify.mobile_app_pixel_10_pro_xl
+  poll_minutes: 5
+  plan_minutes: 15
+  bootstrap_days: 60
+  log_level: info
+schema:
+  vehicle:
+    name: str
+    soc: str
+    odometer: str?
+    location: str?
+    plugged: str?
+    capacity_kwh: float(5,250)
+    kwh_per_km: float(0.08,0.6)
+  charger:
+    plugged: str?
+    power: str?
+    power_unit: list(W|kW)
+    max_kw: float(1,350)
+    min_kw: float(0.5,50)
+  energy:
+    surplus_entity: str?
+    surplus_attribute: str?
+    surplus_time_key: str?
+    surplus_key: str?
+    surplus_invert: bool
+    surplus_unit: list(W|kW)
+    price_entity: str?
+    price_unit: list(ct|EUR)
+    price_ct: float(0,200)
+    feedin_ct: float(0,100)
+  policy:
+    target_soc: int(20,100)
+    reserve_soc: int(0,50)
+    urgent_days: float(0,14)
+    min_savings_eur: float(0,100)
+    min_kwh: float(0,200)
+    lead_hours: float(1,72)
+    quiet_start: match(^\d{1,2}:\d{2}$)
+    quiet_end: match(^\d{1,2}:\d{2}$)
+    horizon_hours: int(12,72)
+    quantile: float(0.5,0.99)
+    halflife_days: float(3,365)
+    max_per_day: int(0,10)
+    snooze_hours: float(1,168)
+  notify:
+    enabled: bool
+    services:
+      - str
+  poll_minutes: int(1,60)
+  plan_minutes: int(5,120)
+  bootstrap_days: int(0,365)
+  log_level: list(debug|info|warning|error)

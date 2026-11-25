@@ -1,0 +1,31 @@
+configuration:
+  vehicle:
+    name: Fahrzeug
+    description: >-
+      Name für die Texte, Sensoren für Ladestand (%), Kilometerstand, Standort (device_tracker/person),
+      optional Ladeanschluss am Auto, Akkukapazität (kWh netto) und Startwert Verbrauch (kWh/km).
+  charger:
+    name: Wallbox
+    description: Stecker-Sensor, Ladeleistung (W oder kW), maximale und minimale Ladeleistung (kW).
+  energy:
+    name: Energie und Preise
+    description: >-
+      Entität mit stündlicher Prognose als Attribut (Zeit- und Wertschlüssel; Netz-Saldo invertieren:
+      Überschuss = −Saldo), Strompreis-Entität oder fester Preis (ct/kWh), Einspeisevergütung (ct/kWh).
+  policy:
+    name: Regeln
+    description: >-
+      Ziel- und Reserve-SoC, Dringlichkeit (Tage), Mindest-Ersparnis (€), Mindestmenge (kWh), Vorlauf (h),
+      Ruhezeit, Horizont (h), Vorsichts-Quantil, Halbwertszeit des Lernens (Tage), max. Meldungen pro Tag,
+      Dauer von „Heute nicht“ (h).
+  notify:
+    name: Benachrichtigung
+    description: Notify-Dienste, z. B. notify.mobile_app_mein_handy.
+  poll_minutes:
+    name: Abfrageintervall (min)
+  plan_minutes:
+    name: Planungsintervall (min)
+  bootstrap_days:
+    name: Verlauf beim ersten Start (Tage)
+  log_level:
+    name: Log-Level
