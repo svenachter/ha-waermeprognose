@@ -144,3 +144,43 @@ die Summen-Abweichung und die mittlere absolute Stundenabweichung. Sensor:
 - Der Netto-Bedarf berücksichtigt weder Batterie noch BHKW noch Wallbox – das plant der Optimierer.
 - Takten unterhalb der Mindestmodulation (`below_min_modulation`) wird nur markiert,
   nicht mit einem COP-Abschlag versehen.
+
+## Plan/Ist-Tabelle (ab 0.4.0)
+
+Der Sensor `sensor.waermeprognose_plan_html` enthält im Attribut `html` eine fertige Tabelle
+für die **HTML Jinja2 Template card** (in Home Assistant 2026.11+ über Einstellungen →
+Marketplace, Suche „HTML“; nicht die „Lovelace Html card“):
+
+```yaml
+type: custom:html-template-card
+title: Wärmeplanung Plan/Ist
+ignore_line_breaks: true
+content: |
+  {{ state_attr('sensor.waermeprognose_plan_html', 'html') }}
+```
+
+Dieselbe Tabelle liefert `GET /api/v1/plan.html` als eigene Seite (mit Token).
+
+| Spalte | Prognose | Ist |
+|---|---|---|
+| Wärme, davon WW, WP-Strom, COP, PV, Haushalt | gespeicherte Prognose mit ≈ `compare.lead_hours` Vorlauf | wie beim Abgleich |
+| Netz ± | WP-Strom + Haushalt − PV | Netzbezug − Einspeisung (`plan_view.grid_*`) |
+| BHKW el / th | – | `plan_view.chp_power`; Wärme = Strom × `chp_heat_per_el` |
+| Puffer WP o/u, Puffer BHKW | – | Stundenmittel der Temperaturfühler |
+| Kosten € | Netzbedarf × Preis − Überschuss × Vergütung | Bezug × Preis − Einspeisung × Vergütung + Gas × Gaspreis |
+| CO₂ kg | Netzbedarf × Netzintensität | Bezug × Netzintensität + Gas × `gas_co2_g_per_kwh` |
+
+Farben nach der Abweichung Prognose/Ist: ≤ 10 % grün, ≤ 25 % gelb, > 25 % rot (nur bei
+Prognosegrößen). Die Kosten- und CO₂-Prognose ist bewusst der reine Netzbedarf ohne Batterie
+und BHKW; den echten Fahrplan dieser Anlagen liefert später das HEMS.
+
+Das HTML ist für 7 Tage rund 100 kB groß. Home Assistant speichert so große Attribute nicht in
+der Datenbank (einmalige Warnung im Log); für die Anzeige spielt das keine Rolle. Wer die
+Warnung vermeiden will, schließt den Sensor vom Recorder aus:
+
+```yaml
+recorder:
+  exclude:
+    entities:
+      - sensor.waermeprognose_plan_html
+```

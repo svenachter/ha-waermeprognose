@@ -100,6 +100,27 @@ class CompareSettings:
 
 
 @dataclass
+class PlanViewSettings:
+    """HTML plan/actual table (sensor.waermeprognose_plan_html). Empty entity = column omitted."""
+    enabled: bool = True
+    days: int = 7                                   # look-back in full days (+ today)
+    grid_import_power: str = "sensor.e3dc_netzbezug_leistung"       # W or kW
+    grid_export_power: str = "sensor.e3dc_einspeisung_leistung"     # W or kW
+    chp_power: str = "sensor.bhkw_br18_leistung_elektrisch"         # W or kW, electrical
+    chp_gas_energy: str = "sensor.bhkw_gasverbrauch_korrigiert"     # kWh counter
+    buffer_hp_top: str = "sensor.eu20l_buff1_actual_high_temperature"
+    buffer_hp_bottom: str = "sensor.eu20l_buff1_actual_low_temperature"
+    buffer_chp_top: str = "sensor.bhkw_br18_puffer_oben"
+    price: str = "sensor.strompreis_brutto_aktuell"                 # ct/kWh (or EUR/kWh)
+    co2: str = "sensor.energy_price_forecast_eu_de_aktuelle_co2_intensitat"   # g/kWh
+    co2_forecast: str = "sensor.energy_price_forecast_eu_de_co2_prognosereihe"  # raw_* attributes
+    gas_price: str = "input_number.bhkw_gaspreis"                   # ct/kWh
+    feedin_ct_per_kwh: float = 0.0                  # feed-in tariff for exported energy
+    chp_heat_per_el: float = 3.0                    # kWh heat per kWh electricity (BHKW)
+    gas_co2_g_per_kwh: float = 240.0                # natural gas incl. upstream chain
+
+
+@dataclass
 class CalibrationSettings:
     enabled: bool = True
     hour: int = 3
@@ -138,6 +159,7 @@ class Settings:
     pv: PvSettings = field(default_factory=PvSettings)
     household: HouseholdSettings = field(default_factory=HouseholdSettings)
     compare: CompareSettings = field(default_factory=CompareSettings)
+    plan_view: PlanViewSettings = field(default_factory=PlanViewSettings)
     inactive_states: list[str] = field(default_factory=lambda: list(INACTIVE_STATES_DEFAULT))
     publish_sensors: bool = True
     log_level: str = "info"
@@ -185,6 +207,8 @@ def load_settings(path: str | os.PathLike | None = None) -> Settings:
     s.pv = _merge(PvSettings, raw.get("pv"))
     s.household = _merge(HouseholdSettings, raw.get("household"))
     s.compare = _merge(CompareSettings, raw.get("compare"))
+    s.plan_view = _merge(PlanViewSettings, raw.get("plan_view"))
+    s.plan_view.days = int(max(1, min(13, s.plan_view.days)))
     if raw.get("inactive_states"):
         s.inactive_states = [str(x).upper() for x in raw["inactive_states"]]
     s.data_dir = os.environ.get("DATA_DIR", str(path.parent))

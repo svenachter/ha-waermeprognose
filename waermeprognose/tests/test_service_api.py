@@ -231,3 +231,25 @@ def test_compare_published_as_sensor(svc):
     assert len(attrs["rows"]) == 48 and {"t", "lead", "qf", "qi", "qd", "pvd", "hhd"} <= attrs["rows"][0].keys()
     import json
     assert len(json.dumps(attrs)) < 16000
+
+
+def test_plan_view_published_and_served(svc):
+    async def go():
+        await svc.startup()
+        end = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        for i in range(1, 30):
+            h = end - timedelta(hours=i)
+            svc.store.save_forecast(h - timedelta(hours=24), [(h, 11.0, 4.4, 13.0, 0.5, 1.73)])
+        await svc.run_once()
+    asyncio.run(go())
+    state, attrs = svc.ha.published["sensor.waermeprognose_plan_html"]
+    html = attrs["html"]
+    assert attrs["days"] == 7 and "<details open>" in html and "Rückblick" in html
+    assert html.count("<tr") > 7 * 24                       # 7 days back + today + forecast
+    assert '<span class="p">15,4</span>/14,0' in html       # heat plan 11+4.4 vs. actual 7+7
+    assert len(html) < 250_000
+    app = create_app(svc.s, service=svc, run_scheduler=False)
+    with TestClient(app) as c:
+        assert c.get("/api/v1/plan.html").status_code == 401
+        r = c.get("/api/v1/plan.html", headers={"X-API-Key": "geheim"})
+        assert r.status_code == 200 and r.text.startswith("<!DOCTYPE html>") and "Plan/Ist" in r.text

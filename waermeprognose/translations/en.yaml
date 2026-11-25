@@ -25,6 +25,11 @@ configuration:
     name: Domestic hot water
   calibration:
     name: Calibration
+  plan_view:
+    name: Plan/actual table
+    description: >-
+      HTML table for the HTML template card (sensor.waermeprognose_plan_html). Empty entity =
+      column omitted. Prices in ct/kWh, CO2 in g/kWh.
   publish_sensors:
     name: Publish sensors to Home Assistant
   log_level:

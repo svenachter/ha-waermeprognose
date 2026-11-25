@@ -13,6 +13,7 @@ import numpy as np
 
 from . import dhw as dhw_mod
 from . import extras
+from . import planview
 from .aggregate import aggregate_hourly
 from .calibration import fit_flow_offset, fit_heat_model
 from .ha import HomeAssistant
@@ -22,7 +23,7 @@ from .store import Store
 from .weather import OpenMeteo, WeatherSeries
 
 log = logging.getLogger(__name__)
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 CALIBRATED_FIELDS = ("q_base_kw", "q_slope_kw_per_k", "knee_slope_kw_per_k",
                      "solar_gain_kw_per_wm2", "uncertainty", "flow_offset_hp")
 BIAS_DECAY_H = 6.0
@@ -38,6 +39,10 @@ def _dev_pct(fc, ist, floor):
     if fc is None or ist is None or abs(ist) < floor:
         return None
     return round((fc / ist - 1) * 100, 1)
+
+
+def fmt_num(x) -> str:
+    return f"{x:g}".replace(".", ",")
 
 
 def _r(x, nd=3):
@@ -70,6 +75,7 @@ class ForecastService:
         self._weather_at: datetime | None = None
         self._compare_hour: datetime | None = None
         self.compare_result: dict | None = None
+        self.plan_html: str | None = None
         self._lock = asyncio.Lock()
 
     # ---------------------------------------------------------------- setup
@@ -253,6 +259,13 @@ class ForecastService:
                         await self._publish_compare(self.compare_result)
                 except Exception as e:  # noqa: BLE001
                     log.warning("Abgleich Prognose/Ist fehlgeschlagen: %s", e)
+            if self.s.plan_view.enabled:
+                try:
+                    self.plan_html = await self.plan_view()
+                    if self.s.publish_sensors:
+                        await self._publish_plan_view(self.plan_html)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("Plan/Ist-Tabelle nicht erstellt: %s", e)
             return res
 
     async def _run(self) -> dict:
@@ -481,6 +494,18 @@ class ForecastService:
         return info
 
     # ---------------------------------------------------------------- forecast vs. actual
+    def _best_forecasts(self, start: datetime, end: datetime, lead_h: float) -> dict[int, tuple]:
+        """Per target hour the stored forecast whose lead time is closest to ``lead_h``."""
+        best: dict[int, tuple] = {}
+        for row in self.store.forecasts_for(start, end):
+            issued, target = row[0], row[1]
+            lead = (target - issued) / 3600
+            if lead < self.s.compare.min_lead_hours:
+                continue
+            if target not in best or abs(lead - lead_h) < abs(best[target][0] - lead_h):
+                best[target] = (lead, row)
+        return best
+
     async def compare_hourly(self, hours: int | None = None, lead_h: float | None = None) -> dict:
         """Hour by hour: stored forecast (lead ≈ lead_h) vs. measured values for the last hours."""
         c, e = self.s.compare, self.s.entities
@@ -501,14 +526,7 @@ class ForecastService:
         corr = self.params.power_correction
         hh_corr = (corr - 1.0) if self.s.household.correct_hp_share else 0.0
 
-        best: dict[int, tuple] = {}
-        for row in self.store.forecasts_for(start, end):
-            issued, target = row[0], row[1]
-            lead = (target - issued) / 3600
-            if lead < c.min_lead_hours:
-                continue
-            if target not in best or abs(lead - lead_h) < abs(best[target][0] - lead_h):
-                best[target] = (lead, row)
+        best = self._best_forecasts(start, end, lead_h)
 
         rows = []
         sums = {k: [0.0, 0.0, 0] for k in ("q", "p", "pv", "hh")}
@@ -551,6 +569,110 @@ class ForecastService:
                 "units": "kWh je Stunde; Abweichung = Prognose/Ist − 1 in %",
                 "note": "WP-Strom Ist = Reglerzähler × power_correction; PV-Ist = entities.pv_power",
                 "summary": summary, "rows": rows}
+
+    # ---------------------------------------------------------------- plan/actual HTML
+    async def plan_view(self) -> str:
+        """HTML table: last ``plan_view.days`` days forecast vs. actual + current forecast."""
+        pvs, e, c = self.s.plan_view, self.s.entities, self.s.compare
+        tz = self.tz
+        now = datetime.now(timezone.utc)
+        end = now.replace(minute=0, second=0, microsecond=0)          # first open hour
+        start = ((now.astimezone(tz) - timedelta(days=pvs.days))
+                 .replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc))
+        extra = {k: getattr(pvs, k) for k in (
+            "grid_import_power", "grid_export_power", "chp_power", "chp_gas_energy", "buffer_hp_top",
+            "buffer_hp_bottom", "buffer_chp_top", "price", "co2") if getattr(pvs, k)}
+        ids = list(dict.fromkeys(i for i in (
+            e.heat_thermal, e.dhw_thermal, e.heat_electric, e.dhw_electric, e.pv_power,
+            e.household_power, e.hp_power, *extra.values()) if i))
+        st = await self.ha.statistics(ids, start, end, period="hour", types=("change", "mean"))
+
+        def col(sid, key):
+            if not sid:
+                return {}
+            return {r["start"]: r.get(key) for r in st.get(sid, []) if r.get(key) is not None}
+
+        async def unit(eid):
+            s = await self.ha.state(eid) if eid else None
+            return ((s or {}).get("attributes") or {}).get("unit_of_measurement")
+
+        f_imp = planview.power_factor(await unit(pvs.grid_import_power))
+        f_exp = planview.power_factor(await unit(pvs.grid_export_power))
+        f_chp = planview.power_factor(await unit(pvs.chp_power))
+        f_price = planview.price_factor(await unit(pvs.price))
+        price_now = await self.ha.float_state(pvs.price)
+        price_now = None if price_now is None else price_now * f_price
+        gas_ct = await self.ha.float_state(pvs.gas_price)
+        co2_fc = {}
+        if pvs.co2_forecast:
+            co2_fc = planview.parse_series_attr(((await self.ha.state(pvs.co2_forecast)) or {}).get("attributes"))
+
+        q_h, q_w = col(e.heat_thermal, "change"), col(e.dhw_thermal, "change")
+        p_h, p_w = col(e.heat_electric, "change"), col(e.dhw_electric, "change")
+        pv_w, hh_w, hp_w = col(e.pv_power, "mean"), col(e.household_power, "mean"), col(e.hp_power, "mean")
+        imp_w, exp_w = col(pvs.grid_import_power, "mean"), col(pvs.grid_export_power, "mean")
+        chp_w, gas_c = col(pvs.chp_power, "mean"), col(pvs.chp_gas_energy, "change")
+        b_top, b_bot = col(pvs.buffer_hp_top, "mean"), col(pvs.buffer_hp_bottom, "mean")
+        b_chp, price_m, co2_m = col(pvs.buffer_chp_top, "mean"), col(pvs.price, "mean"), col(pvs.co2, "mean")
+        corr = self.params.power_correction
+        hh_corr = (corr - 1.0) if self.s.household.correct_hp_share else 0.0
+        best = self._best_forecasts(start, end, c.lead_hours)
+
+        rows = []
+        h = start
+        while h < end:
+            ist = {
+                "q": (q_h[h] + q_w.get(h, 0.0)) if h in q_h else None,
+                "qw": q_w.get(h) if h in q_h else None,
+                "p": (p_h[h] + p_w.get(h, 0.0)) * corr if h in p_h else None,
+                "pv": pv_w[h] / 1000 if h in pv_w else None,
+                "hh": max(hh_w[h] - hh_corr * hp_w.get(h, 0.0), 0.0) / 1000 if h in hh_w else None,
+                "imp": imp_w[h] * f_imp if h in imp_w else None,
+                "exp": exp_w.get(h, 0.0) * f_exp if h in imp_w else None,
+                "chp_el": chp_w[h] * f_chp if h in chp_w else None,
+                "gas": gas_c.get(h),
+                "buf_hp_top": b_top.get(h), "buf_hp_bot": b_bot.get(h), "buf_chp": b_chp.get(h),
+            }
+            if ist["imp"] is not None:
+                ist["net"] = ist["imp"] - (ist["exp"] or 0.0)
+            if ist["chp_el"] is not None:
+                ist["chp_th"] = ist["chp_el"] * pvs.chp_heat_per_el
+            plan = {}
+            b = best.get(int(h.timestamp()))
+            if b:
+                _lead, (_iss, _t, qh, qd, pe, pv, hh) = b
+                plan = {"q": qh + qd, "qw": qd, "p": pe, "pv": pv, "hh": hh}
+                if pv is not None and hh is not None:
+                    plan["net"] = pe + hh - pv
+            price = price_m[h] * f_price if h in price_m else price_now
+            rows.append({"t": h, "past": True, "plan": plan, "ist": ist, "price_ct": price,
+                         "co2_g": co2_m.get(h, co2_fc.get(h))})
+            h += timedelta(hours=1)
+
+        for hr in aggregate_hourly((self.result or {}).get("series") or []):
+            t = datetime.fromisoformat(hr["t"]).astimezone(timezone.utc)
+            if t < end:
+                continue
+            plan = {"q": hr["q_total_kw"], "qw": hr["q_dhw_kw"], "p": hr["p_el_kw"],
+                    "pv": hr["pv_kw"], "hh": hr["household_kw"], "net": hr["net_kw"]}
+            rows.append({"t": t, "past": False, "plan": plan, "ist": None,
+                         "price_ct": price_now, "co2_g": co2_fc.get(t)})
+
+        for r in rows:
+            planview.economics(r, pvs.feedin_ct_per_kwh, gas_ct, pvs.gas_co2_g_per_kwh)
+        notes = []
+        if not pvs.feedin_ct_per_kwh:
+            notes.append("Einspeisevergütung nicht gesetzt (plan_view.feedin_ct_per_kwh = 0): "
+                         "Einspeisung mindert die Kosten nicht.")
+        if pvs.chp_power:
+            notes.append(f"BHKW-Wärme berechnet als Strom × {fmt_num(pvs.chp_heat_per_el)}; "
+                         "Puffertemperaturen und BHKW nur Ist (Plan folgt mit dem HEMS-Fahrplan).")
+        return planview.render(rows, tz, now, {"lead_hours": c.lead_hours, "notes": notes})
+
+    async def _publish_plan_view(self, html_text: str):
+        await self.ha.set_state("sensor.waermeprognose_plan_html", datetime.now(self.tz).isoformat(), {
+            "friendly_name": "Wärmeprognose Plan/Ist", "icon": "mdi:table-eye",
+            "device_class": "timestamp", "days": self.s.plan_view.days, "html": html_text})
 
     # ---------------------------------------------------------------- backtest
     async def backtest(self, days: int = 7, lead_h: int = 24) -> dict:

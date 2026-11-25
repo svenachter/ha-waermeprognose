@@ -9,6 +9,7 @@ from typing import Literal
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi.responses import HTMLResponse
 
 from .aggregate import aggregate_hourly  # noqa: F401  (re-exported)
 from .service import VERSION, ForecastService, Scheduler
@@ -108,6 +109,19 @@ def create_app(settings: Settings | None = None, service: ForecastService | None
                       lead_hours: float = Query(default=24.0, ge=0, le=72)):
         """Stored forecast (lead closest to lead_hours) vs. measured values, hour by hour."""
         return await svc().compare_hourly(hours, lead_hours)
+
+    @app.get("/api/v1/plan.html", dependencies=[Depends(auth)], response_class=HTMLResponse)
+    async def plan_html():
+        """Plan/actual table as standalone HTML page (same content as sensor.waermeprognose_plan_html)."""
+        s = svc()
+        need_result(s)
+        body = s.plan_html or await s.plan_view()
+        return HTMLResponse("<!DOCTYPE html><html lang=\"de\"><head><meta charset=\"utf-8\">"
+                            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+                            "<title>Wärmeprognose Plan/Ist</title><style>:root{--divider-color:#ddd;"
+                            "--secondary-text-color:#666;--card-background-color:#fff;--primary-color:#03a9f4}"
+                            "body{font-family:system-ui,sans-serif;margin:12px}</style></head>"
+                            f"<body>{body}</body></html>")
 
     @app.post("/api/v1/refresh", dependencies=[Depends(auth)])
     async def refresh():

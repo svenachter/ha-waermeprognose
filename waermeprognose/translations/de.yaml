@@ -40,6 +40,12 @@ configuration:
   calibration:
     name: Kalibrierung
     description: Nächtliche Neuschätzung der Heizlast aus der HA-Historie.
+  plan_view:
+    name: Plan/Ist-Tabelle
+    description: >-
+      HTML-Tabelle für die HTML-Template-Karte (Sensor sensor.waermeprognose_plan_html):
+      die letzten Tage Prognose gegen Ist plus aktuelle Prognose. Leere Entität = Spalte entfällt.
+      Preise in ct/kWh, CO2 in g/kWh; Einspeisevergütung in ct/kWh eintragen.
   publish_sensors:
     name: Sensoren in Home Assistant anlegen
   log_level:

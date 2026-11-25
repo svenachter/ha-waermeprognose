@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.0 – 2026-11-25
+
+- Neue Plan/Ist-Tabelle als HTML im Stil der Predbat-Plan-Karte: Sensor
+  `sensor.waermeprognose_plan_html` (Attribut `html`) für die HTML-Jinja2-Template-Karte und
+  Seite `GET /api/v1/plan.html`. Je Tag aufklappbar: Heute und Morgen offen, die letzten
+  `plan_view.days` Tage (Standard 7) im Rückblick. Spalten Wärme, davon WW, WP-Strom, COP, PV,
+  Haushalt, Netz, BHKW elektrisch/thermisch, Puffertemperaturen, Kosten und CO₂.
+- Vergangene Stunden zeigen Prognose (Vorlauf `compare.lead_hours`) gegen Ist, eingefärbt nach
+  der Abweichung (≤ 10 % grün, ≤ 25 % gelb, > 25 % rot); ab der Linie die aktuelle Prognose.
+- Kosten: Ist = Netzbezug × Strompreis − Einspeisung × Vergütung + BHKW-Gas × Gaspreis;
+  Prognose = reiner Netzbedarf (ohne Batterie und BHKW). CO₂: Netzbezug × stündliche
+  Netzintensität (Ist aus der Statistik, Prognose aus der Prognosereihe) + Gas × Faktor.
+- Neue Optionsgruppe `plan_view` (Entitäten, Einspeisevergütung, BHKW-Wärmeverhältnis,
+  CO₂-Faktor Gas). Bestehende Konfigurationen übernehmen die Standardwerte automatisch.
+
 ## 0.3.0 – 2026-11-18
 
 - Abgleich Prognose ↔ Ist für die letzten 48 h, Stunde für Stunde: Wärme (Heizung + WW),
