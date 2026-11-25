@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.1.2
+- Benachrichtigung ohne `return_response` aufrufen (notify-Dienste liefern keine Antwort, HA meldete 400).
+
 ## 0.1.1
 - Verbrauch pro km über ganze Fahrstrecken zwischen zwei Ladungen statt über Sample-Paare
   (Auto-Clouds melden den Ladestand oft später als den Kilometerstand).

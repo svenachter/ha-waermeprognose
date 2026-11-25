@@ -18,7 +18,7 @@ from .store import Store
 
 log = logging.getLogger(__name__)
 UTC = timezone.utc
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 EVENT_ACTION = "mobile_app_notification_action"
 EVENT_TEST = "ladeassistent_test"
 
@@ -232,11 +232,15 @@ class Service:
         if not s.notify.enabled or not s.notify.services:
             log.info("Benachrichtigung unterdrückt (keine Dienste): %s", a.title)
             return False
+        ok_any = False
         for svc in s.notify.services:
             try:
-                await self.ha.call_service(svc, payload(a))
+                await self.ha.call_service(svc, payload(a), response=False)
+                ok_any = True
             except Exception as ex:
                 log.warning("Benachrichtigung über %s fehlgeschlagen: %s", svc, ex)
+        if not ok_any:
+            return False
         log.info("Benachrichtigt: %s", a.title)
         if not force:
             mark_sent(st, a.key, now)

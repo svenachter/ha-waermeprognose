@@ -37,7 +37,7 @@ def test_compute_publish_notify(tmp_path):
             posted[path.rsplit("/", 1)[1]] = json.loads(req.content)
             return httpx.Response(200, json={})
         if req.method == "POST" and path.startswith("/core/api/services/"):
-            calls.append((path, json.loads(req.content)))
+            assert "return_response" not in str(req.url); calls.append((path, json.loads(req.content)))
             return httpx.Response(200, json=[])
         return httpx.Response(404)
 
