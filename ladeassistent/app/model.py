@@ -41,20 +41,36 @@ def weighted_quantile(values: list[float], weights: list[float], q: float) -> fl
 # ---------------------------------------------------------------- consumption per km
 def estimate_kwh_per_km(samples: list[Sample], capacity_kwh: float, fallback: float,
                         min_km: float = 50.0) -> tuple[float, dict]:
-    """ΔSoC over Δkm on stretches without charging. Falls back below ``min_km`` of evidence."""
+    """ΔSoC over Δkm per stretch between two charges. Falls back below ``min_km`` of evidence.
+
+    Whole stretches instead of sample pairs, because car clouds often report the SoC later
+    than the odometer (km and SoC drop land in different samples)."""
     km = kwh = 0.0
-    prev = None
+
+    def close(first, last):
+        nonlocal km, kwh
+        if first is None or last is None:
+            return
+        dkm, dsoc = last.odo - first.odo, first.soc - last.soc
+        if 0 < dkm < 3000 and dsoc > 0:
+            km += dkm
+            kwh += dsoc / 100 * capacity_kwh
+
+    first = prev = None
     for s in samples:
-        if s.soc is None or s.odo is None:
+        charging = bool(s.charge_kw and s.charge_kw > 0.3)
+        if charging or s.soc is None or s.odo is None:
+            if charging:
+                close(first, prev)
+                first = prev = None
             continue
-        if prev is not None:
-            dkm = s.odo - prev.odo
-            dsoc = prev.soc - s.soc
-            charged = bool(s.charge_kw and s.charge_kw > 0.3) or bool(prev.charge_kw and prev.charge_kw > 0.3)
-            if 0 < dkm < 1000 and dsoc > 0 and not charged:
-                km += dkm
-                kwh += dsoc / 100 * capacity_kwh
+        if prev is not None and s.soc > prev.soc + 2:          # charged elsewhere
+            close(first, prev)
+            first = None
+        if first is None:
+            first = s
         prev = s
+    close(first, prev)
     if km < min_km or kwh <= 0:
         return fallback, {"source": "fallback", "km": round(km, 1)}
     v = min(max(kwh / km, 0.10), 0.45)

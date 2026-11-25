@@ -23,6 +23,11 @@ def test_kwh_per_km_learned_and_fallback():
     v, info = estimate_kwh_per_km(s, 70, 0.2)
     assert info["source"] == "learned"
     assert abs(v - (0.4 * 70) / 140) < 1e-6
+    # SoC reported late: km in one sample, SoC drop in the next
+    lag = [Sample(t0, soc=80, odo=1000), Sample(t0 + timedelta(hours=1), soc=80, odo=1050),
+           Sample(t0 + timedelta(hours=2), soc=65, odo=1050)]
+    v2, _ = estimate_kwh_per_km(lag, 70, 0.2, min_km=10)
+    assert abs(v2 - 0.15 * 70 / 50) < 1e-6
     v, info = estimate_kwh_per_km(s[:2], 70, 0.2, min_km=100)
     assert v == 0.2 and info["source"] == "fallback"
 
