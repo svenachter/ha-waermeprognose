@@ -57,5 +57,9 @@ def handle_action(state: dict, action: str, now: datetime, snooze_hours: float =
 def payload(advice, tag: str = "ladeassistent") -> dict:
     return {"title": advice.title, "message": advice.message,
             "data": {"tag": tag, "group": "ladeassistent", "clickAction": "/energy",
+                     # Android: deliver at once even in Doze, own channel for sound/importance
+                     "priority": "high", "ttl": 0, "channel": "Lade-Assistent",
+                     # iOS
+                     "push": {"interruption-level": "time-sensitive"},
                      "actions": [{"action": ACTION_OK, "title": "OK"},
                                  {"action": ACTION_SNOOZE, "title": "Heute nicht"}]}}

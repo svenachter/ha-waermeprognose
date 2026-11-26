@@ -18,7 +18,7 @@ from .store import Store
 
 log = logging.getLogger(__name__)
 UTC = timezone.utc
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 EVENT_ACTION = "mobile_app_notification_action"
 EVENT_TEST = "ladeassistent_test"
 

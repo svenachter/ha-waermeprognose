@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.1.3
+- Meldungen mit hoher Priorität (Android `priority: high`, `ttl: 0`, eigener Kanal „Lade-Assistent“; iOS time-sensitive), damit sie auch im Energiesparmodus sofort ankommen.
+
 ## 0.1.2
 - Benachrichtigung ohne `return_response` aufrufen (notify-Dienste liefern keine Antwort, HA meldete 400).
 
